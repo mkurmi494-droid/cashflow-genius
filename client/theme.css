@@ -1,0 +1,698 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap');
+@import "tailwindcss";
+@import "tailwindcss-safe-area";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  --text-4xl: 36px;
+  --text-4xl--line-height: 40px;
+  --font-sans: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+:root {
+  color-scheme: light;
+  /* GenZ gradient theme: vibrant violet → fuchsia → coral over a soft
+     lavender-white base. Bold and youthful, but text stays deep-plum
+     on near-white so everything remains easy to read. */
+  --bg: #f6f3ff;
+  --surface: #ffffff;
+  --surface-soft: #f0eafd;
+  --surface-mint: #e3d9fd;
+  --text: #241b3a;
+  --dim: #6d6390;
+  --border: #e6def8;
+  --accent: #7c3aed;
+  --accent-deep: #4c1d95;
+  --accent-bright: #d946ef;
+  --ai: #e0f2fe;
+  --ai-text: #075985;
+  --warn: #fef3c7;
+  --warn-text: #92400e;
+  --err: #ffe4e6;
+  --err-text: #9f1239;
+  --gold: #fb923c;
+  --radius: 22px;
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface-soft);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+  --grad: linear-gradient(120deg, #7c3aed 0%, #d946ef 52%, #fb7185 82%, #fb923c 100%);
+  --grad-soft: linear-gradient(120deg, rgba(124,58,237,0.12), rgba(217,70,239,0.12), rgba(251,146,60,0.14));
+  /* Premium motion tokens — animation only, no colour/layout change */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.35, 0.4, 1);
+  --ease-soft: cubic-bezier(0.33, 0, 0.2, 1);
+  --dur-fast: 160ms;
+  --dur-med: 320ms;
+  --dur-slow: 560ms;
+  --dur-chart: 750ms;
+}
+
+/* Bold rounded display type for greetings and headline figures. */
+.display-font {
+  font-family: "Sora", "Manrope", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Gradient hero panel (dashboard home, public home): violet → fuchsia
+   → coral with soft light blobs, white text. */
+.hero-panel {
+  background:
+    radial-gradient(110% 160% at 92% -10%, rgba(251, 146, 60, 0.55), transparent 55%),
+    radial-gradient(90% 130% at 4% 112%, rgba(217, 70, 239, 0.5), transparent 55%),
+    linear-gradient(125deg, #6d28d9 0%, #a21caf 48%, #e11d63 78%, #f97316 115%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 20px 46px rgba(124, 58, 237, 0.32);
+}
+
+.chip-glass {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+html,
+body {
+  /* Responsive guard: nothing inside the app may ever push the page
+     sideways on a phone. `clip` (not `hidden`) is used so it does not
+     create a scroll container and sticky/fixed chrome keeps working. */
+  overflow-x: clip;
+  max-width: 100%;
+  background:
+    radial-gradient(90% 480px at 100% -60px, rgba(217, 70, 239, 0.13), transparent 60%),
+    radial-gradient(80% 420px at -10% 30%, rgba(124, 58, 237, 0.1), transparent 60%),
+    radial-gradient(70% 380px at 110% 78%, rgba(251, 146, 60, 0.12), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 12px 34px rgba(76, 29, 149, 0.13);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(76, 29, 149, 0.07);
+}
+
+.btn-primary {
+  background: var(--grad);
+  color: #fff;
+  border-radius: 999px;
+  font-weight: 800;
+  transition: transform 260ms var(--ease-spring), filter var(--dur-med) ease, opacity var(--dur-med) ease, box-shadow var(--dur-med) ease;
+  will-change: transform;
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.07) saturate(1.08);
+    transform: translateY(-1px);
+  }
+}
+.btn-primary:disabled {
+  opacity: 0.55;
+}
+
+.btn-ghost {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  font-weight: 700;
+  transition: background var(--dur-med) ease, border-color var(--dur-med) ease, transform 260ms var(--ease-spring), box-shadow var(--dur-med) ease;
+  will-change: transform;
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--surface-soft);
+    border-color: #d8c9fb;
+    transform: translateY(-1px);
+  }
+}
+
+.btn-danger {
+  background: #e0443a;
+  color: #fff;
+  border-radius: 999px;
+  font-weight: 800;
+  box-shadow: 0 10px 24px rgba(224, 68, 58, 0.32);
+  transition: transform 0.22s ease, filter 0.22s ease, opacity 0.22s ease;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.btn-danger:disabled {
+  opacity: 0.55;
+}
+
+.field {
+  width: 100%;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+  padding: 0.55rem 0.8rem;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.field:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 4px rgba(217, 70, 239, 0.18);
+}
+
+/* Gradient text for a few headline accents */
+.grad-text {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Sticker chip: playful tilted pill used for tiny highlights */
+.sticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--grad);
+  color: #fff;
+  transform: rotate(-2deg);
+  box-shadow: 0 6px 14px rgba(217, 70, 239, 0.3);
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  15% { opacity: 0.9; }
+  85% { opacity: 0.65; }
+  100% { transform: translate(var(--dx, 30px), var(--dy, -60px)) scale(0.6); opacity: 0; }
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.5; }
+  70% { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes scan-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(240%); }
+}
+@keyframes stream-dash {
+  to { stroke-dashoffset: -28; }
+}
+@keyframes orb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes intro-progress {
+  from { width: 0%; }
+  to { width: 100%; }
+}
+@keyframes light-flow {
+  0% { transform: translateX(-14%) skewX(-8deg); opacity: 0.35; }
+  50% { opacity: 0.8; }
+  100% { transform: translateX(14%) skewX(-8deg); opacity: 0.35; }
+}
+@keyframes bounce-soft {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.04); }
+}
+
+.page-anim {
+  animation: page-in 0.45s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.rise {
+  animation: rise-in 0.55s cubic-bezier(0.34, 1.3, 0.4, 1) both;
+}
+.bounce-soft {
+  animation: bounce-soft 2.4s ease-in-out infinite;
+}
+
+/* ---------- touch, focus, motion, skeletons ---------- */
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+label {
+  touch-action: manipulation;
+}
+
+::selection {
+  background: rgba(217, 70, 239, 0.3);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.btn-primary {
+  box-shadow: 0 10px 24px rgba(168, 28, 175, 0.3);
+}
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.btn-ghost:active:not(:disabled) {
+  transform: scale(0.97);
+  background: var(--surface-soft);
+}
+.btn-danger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.card {
+  transition: box-shadow 0.25s ease, transform 0.25s cubic-bezier(0.34, 1.3, 0.4, 1);
+}
+.card-hover:hover {
+  box-shadow: 0 16px 38px rgba(124, 58, 237, 0.16);
+  transform: translateY(-3px);
+}
+
+/* Numbers that line up in columns and don't jitter as they change */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dropdowns / popovers */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pop {
+  animation: pop-in 0.2s cubic-bezier(0.34, 1.4, 0.4, 1) both;
+  transform-origin: top right;
+}
+
+/* Loading placeholders */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.skeleton {
+  border-radius: 14px;
+  background: linear-gradient(
+    100deg,
+    var(--surface-soft) 40%,
+    #fdf4ff 50%,
+    var(--surface-soft) 60%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* On phones, form controls get a 16px font (stops iOS auto-zoom on focus)
+   and a comfortable 44px touch height. */
+@media (max-width: 640px) {
+  .field {
+    font-size: 16px;
+    min-height: 44px;
+    padding: 0.65rem 0.85rem;
+  }
+  textarea.field {
+    min-height: 88px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================================
+   PREMIUM MOTION SYSTEM — animation upgrade only.
+   No colours, layout, spacing or content change in this block.
+   Everything animates transform + opacity (GPU-friendly), stays
+   under ~950ms, uses one elegant ease, and is fully neutralised
+   by the prefers-reduced-motion block below.
+   ============================================================ */
+
+/* --- New keyframes --- */
+@keyframes cg-fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes cg-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cg-scale-in {
+  from { opacity: 0; transform: scale(0.965) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes cg-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cg-modal-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes cg-chart-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.995); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes cg-toast-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes cg-hero-drift {
+  0%, 100% { background-position: 0% 0%, 100% 0%, 0% 0%; }
+  50% { background-position: 2% 1%, 98% 2%, 0% 0%; }
+}
+@keyframes cg-draw-line {
+  from { stroke-dashoffset: 320; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes cg-soft-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes cg-icon-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/* --- Page entrance + staggered children (every page uses .page-anim) --- */
+.page-anim {
+  animation: cg-fade-in 380ms var(--ease-out) both;
+}
+.page-anim > * {
+  animation: cg-fade-up 560ms var(--ease-out) both;
+}
+.page-anim > *:nth-child(1) { animation-delay: 0ms; }
+.page-anim > *:nth-child(2) { animation-delay: 55ms; }
+.page-anim > *:nth-child(3) { animation-delay: 110ms; }
+.page-anim > *:nth-child(4) { animation-delay: 165ms; }
+.page-anim > *:nth-child(5) { animation-delay: 220ms; }
+.page-anim > *:nth-child(6) { animation-delay: 275ms; }
+.page-anim > *:nth-child(7) { animation-delay: 330ms; }
+.page-anim > *:nth-child(n + 8) { animation-delay: 380ms; }
+
+/* Headings & text inside a page settle in with the page — subtle, once. */
+.page-anim h1,
+.page-anim h2 {
+  animation: cg-fade-up 520ms var(--ease-out) both;
+}
+
+/* --- Cards: entrance for grid cards + refined hover --- */
+.page-anim .grid > .card,
+.page-anim .grid > article,
+.stagger-grid > * {
+  animation: cg-fade-up 540ms var(--ease-out) both;
+}
+.page-anim .grid > *:nth-child(1), .stagger-grid > *:nth-child(1) { animation-delay: 30ms; }
+.page-anim .grid > *:nth-child(2), .stagger-grid > *:nth-child(2) { animation-delay: 80ms; }
+.page-anim .grid > *:nth-child(3), .stagger-grid > *:nth-child(3) { animation-delay: 130ms; }
+.page-anim .grid > *:nth-child(4), .stagger-grid > *:nth-child(4) { animation-delay: 180ms; }
+.page-anim .grid > *:nth-child(5), .stagger-grid > *:nth-child(5) { animation-delay: 230ms; }
+.page-anim .grid > *:nth-child(6), .stagger-grid > *:nth-child(6) { animation-delay: 280ms; }
+.page-anim .grid > *:nth-child(n + 7), .stagger-grid > *:nth-child(n + 7) { animation-delay: 320ms; }
+
+.card {
+  transition: box-shadow var(--dur-med) ease, transform 320ms var(--ease-out), border-color var(--dur-med) ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .card-hover:hover {
+    box-shadow: 0 16px 38px rgba(124, 58, 237, 0.16);
+    transform: translateY(-3px);
+  }
+  /* Any card that contains a primary action feels lightly liftable */
+  .card:hover {
+    box-shadow: 0 14px 32px rgba(76, 29, 149, 0.1);
+  }
+}
+
+/* --- Lists: first rows cascade in, long lists stay calm --- */
+.page-anim ul.divide-y > li:nth-child(-n + 12),
+.page-anim ul.space-y-2 > li:nth-child(-n + 8),
+.page-anim ul.space-y-2\.5 > li:nth-child(-n + 8),
+.page-anim ul.space-y-3 > li:nth-child(-n + 8) {
+  animation: cg-fade-up 460ms var(--ease-out) both;
+}
+.page-anim ul > li:nth-child(2) { animation-delay: 40ms; }
+.page-anim ul > li:nth-child(3) { animation-delay: 80ms; }
+.page-anim ul > li:nth-child(4) { animation-delay: 120ms; }
+.page-anim ul > li:nth-child(5) { animation-delay: 160ms; }
+.page-anim ul > li:nth-child(6) { animation-delay: 200ms; }
+.page-anim ul > li:nth-child(n + 7) { animation-delay: 240ms; }
+
+/* Table rows (reports, what-if, calendar tables) */
+.page-anim tbody > tr {
+  animation: cg-fade-in 420ms var(--ease-out) both;
+  transition: background-color var(--dur-fast) ease;
+}
+.page-anim tbody > tr:nth-child(2) { animation-delay: 35ms; }
+.page-anim tbody > tr:nth-child(3) { animation-delay: 70ms; }
+.page-anim tbody > tr:nth-child(4) { animation-delay: 105ms; }
+.page-anim tbody > tr:nth-child(5) { animation-delay: 140ms; }
+.page-anim tbody > tr:nth-child(n + 6) { animation-delay: 175ms; }
+
+/* --- Every button / link / interactive row: elegant click feedback --- */
+button, a, select, input[type="checkbox"], input[type="radio"] {
+  transition: transform 220ms var(--ease-spring), background-color var(--dur-med) ease, color var(--dur-med) ease, border-color var(--dur-med) ease, box-shadow var(--dur-med) ease, opacity var(--dur-med) ease, filter var(--dur-med) ease;
+}
+button:active:not(:disabled), a:active {
+  transform: scale(0.975);
+}
+.btn-primary:active:not(:disabled) { transform: scale(0.96); }
+.btn-ghost:active:not(:disabled) { transform: scale(0.97); }
+.btn-danger:active:not(:disabled) { transform: scale(0.97); }
+button:disabled { transition: opacity var(--dur-med) ease; }
+
+/* Icons inside buttons gently emphasise on hover (desktop only) */
+@media (hover: hover) and (pointer: fine) {
+  button:hover:not(:disabled) > span[aria-hidden]:first-child,
+  a:hover > span[aria-hidden]:first-child {
+    animation: cg-icon-pop 320ms var(--ease-spring) both;
+  }
+  button:hover:not(:disabled) {
+    filter: brightness(1.02);
+  }
+  .btn-primary:hover:not(:disabled), .btn-danger:hover:not(:disabled) {
+    filter: brightness(1.07) saturate(1.06);
+  }
+}
+
+/* Magnetic targets: JS (App shell) writes a tiny translate; this
+   transition makes the pull and the release buttery. */
+.magnetic, .btn-primary, .btn-ghost {
+  transform-origin: center;
+}
+.magnetic-wrap { transform-origin: center; }
+
+/* --- Navigation: sidebar, top bar, mobile bottom bar, switcher pills --- */
+aside nav button, header button, nav[aria-label="Mobile navigation"] button {
+  transition: transform 240ms var(--ease-spring), background-color var(--dur-med) ease, color var(--dur-med) ease, box-shadow var(--dur-med) ease, opacity var(--dur-med) ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  aside nav button:hover:not(:disabled) { transform: translateX(2px); }
+  nav[aria-label="Mobile navigation"] button:hover { transform: none; }
+}
+/* Active mobile-nav pill already has a bg — make its change smooth */
+nav[aria-label="Mobile navigation"] button > span {
+  transition: background-color var(--dur-med) ease, transform 280ms var(--ease-spring);
+}
+nav[aria-label="Mobile navigation"] button:active > span { transform: scale(0.92); }
+/* Workspace switcher + segmented controls */
+[role="group"] > button, [role="radiogroup"] > button {
+  transition: transform 240ms var(--ease-spring), background-color var(--dur-med) ease, color var(--dur-med) ease, box-shadow var(--dur-med) ease, border-color var(--dur-med) ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  [role="radiogroup"] > button:hover { transform: translateY(-2px); }
+}
+
+/* --- Forms: fields, selects, checkboxes, range sliders --- */
+.field {
+  transition: border-color var(--dur-fast) ease, box-shadow 260ms ease, background-color var(--dur-med) ease, transform 220ms var(--ease-out);
+}
+.field:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 4px rgba(217, 70, 239, 0.18);
+}
+input[type="range"] { transition: opacity var(--dur-med) ease; accent-color: var(--accent); }
+input[type="checkbox"], input[type="radio"] { transition: transform 180ms var(--ease-spring); }
+input[type="checkbox"]:active, input[type="radio"]:active { transform: scale(0.88); }
+label { transition: color var(--dur-med) ease; }
+
+/* --- Dropdowns, menus, popovers --- */
+@keyframes cg-pop-in {
+  from { opacity: 0; transform: translateY(-5px) scale(0.965); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pop {
+  animation: cg-pop-in 220ms var(--ease-spring) both;
+  transform-origin: top right;
+}
+select.field { transition: border-color var(--dur-fast) ease, box-shadow 260ms ease, background-color var(--dur-med) ease; }
+
+/* --- Modals & dialogs: overlay fades, panel rises --- */
+div[role="dialog"], div[role="alertdialog"] {
+  animation: cg-overlay-in 240ms ease both;
+}
+div[role="dialog"] > div, div[role="alertdialog"] > div {
+  animation: cg-modal-in 380ms var(--ease-out) both;
+}
+/* Keep the existing .rise utility in sync with the new modal motion */
+.rise { animation: cg-modal-in 420ms var(--ease-out) both; }
+
+/* --- Toast / undo snackbar --- */
+.toast-in, div[role="status"].fixed {
+  animation: cg-toast-in 380ms var(--ease-out) both;
+}
+
+/* --- Hero panel: very slow, subtle light drift (colours unchanged) --- */
+.hero-panel {
+  animation: cg-hero-drift 14s ease-in-out infinite;
+  background-size: 110% 110%, 110% 110%, 100% 100%;
+}
+.hero-panel .chip-glass {
+  transition: background-color var(--dur-med) ease, transform 240ms var(--ease-spring);
+}
+@media (hover: hover) and (pointer: fine) {
+  .hero-panel button.chip-glass:hover, button.chip-glass:hover { transform: translateY(-1px); }
+}
+
+/* Subtle floating for decorative / empty-state orbs only */
+.float-soft { animation: cg-soft-float 5s ease-in-out infinite; }
+
+/* --- Charts & graphs (Recharts across Dashboard / Future / Reports) --- */
+.recharts-wrapper, .recharts-surface {
+  animation: cg-chart-in var(--dur-chart) var(--ease-out) both;
+}
+.recharts-wrapper { transition: opacity var(--dur-med) ease; }
+.recharts-tooltip-wrapper {
+  transition: transform 120ms ease-out, opacity 160ms ease-out !important;
+}
+.recharts-cartesian-axis-tick text { transition: fill var(--dur-med) ease; }
+/* Sparkline draw-on (components.tsx sets dasharray via CSS var fallback) */
+.spark-draw polyline {
+  stroke-dasharray: 320;
+  animation: cg-draw-line 900ms var(--ease-out) both;
+}
+
+/* --- Progress bars: smooth growth on mount + on value change --- */
+.h-full.rounded-full {
+  transition-property: width;
+  transition-duration: 950ms;
+  transition-timing-function: var(--ease-out);
+}
+/* Budget / savings track containers get a gentle reveal */
+div.h-2.rounded-full, div.h-2\.5.rounded-full, div.h-3.rounded-full {
+  overflow: hidden;
+}
+
+/* --- Badges, chips, stickers --- */
+.sticker { transition: transform 240ms var(--ease-spring); }
+@media (hover: hover) and (pointer: fine) {
+  .sticker:hover { transform: rotate(0deg) scale(1.04); }
+}
+
+/* --- Scroll reveal (anim.tsx Reveal + App observer for .reveal) --- */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 620ms var(--ease-out), transform 620ms var(--ease-out);
+  will-change: opacity, transform;
+}
+.reveal.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* --- Calculator panel, FAB, misc floating panels --- */
+.no-print.fixed.z-\[65\], .no-print.fixed.bottom-24 {
+  animation: cg-scale-in 300ms var(--ease-out) both;
+}
+
+/* Reduced motion: reveal content must never stay hidden, and every
+   new animation above collapses to instant (global rule below also
+   covers it, this keeps .reveal visible even mid-transition). */
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .hero-panel { animation: none !important; }
+  .magnetic-wrap { transform: none !important; transition: none !important; }
+}
+
+/* ---------- Custom cursor (user-selectable in Settings) ----------
+   The canvas overlay is drawn by particleCursor.tsx and renders the
+   account's chosen style: Blue Particle, Gradient or Mint particle
+   trails, or the Minimal dot + ring. It is only shown on devices with
+   a fine pointer + hover (desktop); touch devices keep the native
+   interaction and never see the canvas. The native arrow is hidden
+   only while the component is active (it adds `has-particle-cursor`
+   to <html>), so if the effect ever fails to start — or the user
+   picks Off / Default in Settings — the normal cursor remains. */
+.particle-cursor-canvas {
+  display: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .particle-cursor-canvas {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+  }
+  html.has-particle-cursor,
+  html.has-particle-cursor * {
+    cursor: none !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}
