@@ -2,13 +2,13 @@
 // Money is stored as integer minor units (paise/cents)
 // so every calculation is exact decimal arithmetic — never floats.
 
-import { bigint, integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, integer, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 // ---------- accounts (local workspace authentication) ----------
 // Account rows live here with salted PBKDF2 password hashes and
 // server-side sessions, while identity proof runs through the
 // connected Supabase Auth project: Google OAuth sign-in, and email
-// sign-up verification via a real 6-digit OTP that Supabase emails
+// sign-up verification via a confirmation link that Supabase emails
 // to the user's own inbox (never generated or shown by this app).
 // The auth_codes table below is legacy from the retired local-code
 // flow — its rows are historical and never read. Every user-owned
@@ -141,7 +141,17 @@ export const invoices = pgTable("invoices", {
   updatedAt: timestamp("updated_at", { mode: "date" })
     .notNull()
     .defaultNow(),
-});
+}, (t) => [
+  // One invoice number per workspace: two invoices with the same
+  // number in the same owner's workspace are a duplicate, full stop.
+  // (2026-11-14 live test: the stale UI made a save look like it did
+  // nothing, so the same INV-2026-001 was saved twice and both rows
+  // persisted — there was no guard at all. The server-side check in
+  // saveInvoice gives the plain-language error; this index is the
+  // race-proof backstop, and it also blocks duplicates from any
+  // other path, e.g. a restored backup.)
+  uniqueIndex("invoices_owner_mode_number_unique").on(t.ownerId, t.mode, t.number),
+]);
 
 export const invoiceItems = pgTable("invoice_items", {
   id: text("id").primaryKey(),

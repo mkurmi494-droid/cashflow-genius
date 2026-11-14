@@ -60,6 +60,82 @@ Two fixes found by testing and fixed in the port:
   all JS chunks serve 200, but no browser drove the UI here)
 - Gemini AI answers with a real key (no key exists yet)
 
+## 2026-11-14 — live-test bug fixes (stale UI, duplicate invoices, activity mislabel, OTP copy)
+
+- Live test (deployment 003cf71, signed in as mkurmi494@gmail.com) passed
+  all core flows but found 4 bugs; all fixed here, NOT pushed, NOT deployed.
+- Bug 1 — stale UI (root cause of bug 2): after a save the in-session
+  view did not refresh (dashboard once showed in ₹0 · out ₹0 · 0
+  transaction(s) while the Chai expense existed); records appeared only
+  after a reload. Root cause: the ledger is read through React Query
+  (["cg-state"], 30s staleTime) and most page mutations only showed a
+  toast — they never invalidated or refetched that query (Money save,
+  Invoices mark-paid/set-status/delete/save, Insights budget, Future
+  recurring/scenario, Vault note, Settings mode switch). The server even
+  comments "the client refetches after mutations" — it didn't. Fix,
+  centralised so no mutation can forget it: client/api.ts dispatches a
+  "cg:mutated" event after every successful non-read action call
+  (reads excluded so a refetch can never re-trigger itself; failed
+  calls dispatch nothing), and client/App.tsx listens for it and
+  invalidates ["cg-state"], ["cg-combined"] and ["note-versions"].
+  The server route is force-dynamic and getState is a pure read, so
+  the client cache was the only staleness source.
+- Bug 2 — duplicate invoices: two identical INV-2026-001 rows (Test
+  Customer, ₹1,180 each), TOTAL INVOICED ₹2,360. The first save looked
+  like it did nothing (bug 1) so it was saved again and both persisted
+  — there was no guard at all. Fix: (a) new migration
+  drizzle/0001_invoice_number_unique.sql — unique index on
+  (owner_id, mode, number); (b) server-side assertInvoiceNumberFree
+  in saveInvoice (create + rename paths; editing keeps its own number)
+  returning "An invoice with number X already exists in this
+  workspace. Change the number and try again."; (c) 23505 from the
+  index is caught and turned into the same plain message (race-proof).
+  No existing data was deleted. LIVE DEPLOY NOTE: the live database
+  already holds the two duplicate INV-2026-001 rows, so applying
+  migration 0001 in the Supabase SQL Editor will FAIL until one of
+  them is renumbered first (edit one invoice's number in the app) —
+  then re-run the migration. The server-side guard works even before
+  the index exists.
+- Bug 3 — activity mislabel: Settings → Recent activity showed
+  "Signed in with Google" for an email + password sign-in (Google was
+  never used). Root cause: Supabase's signup email carries a
+  confirmation LINK, and opening it redirects back with ?code=… —
+  hasGoogleCallback() treated ANY code as a Google return and routed
+  it through googleSignIn, which logged "Signed in with Google".
+  Fix: startGoogleOAuth sets a sessionStorage flag; the return
+  handler branches on it — flag present → googleSignIn; absent → new
+  confirmEmailLink action (verifies the Supabase token, marks the
+  matching local email account verified, never creates an account,
+  logs "Signed in with email"). login and verifyAccount successes now
+  also log "Signed in with email". The sign-in toast follows the
+  actual method.
+- Bug 4 — OTP copy: the sign-up page promised "Supabase emails a real
+  6-digit code", but Supabase actually sends a confirmation LINK (no
+  numeric OTP was ever sent — live-tested 2026-11-14). Fix: copy now
+  says a confirmation link will be emailed and to tap it; the 6-digit
+  code box stays only as a fallback for emails that also carry a code,
+  and the resend button is "Send a new link". No paid email service
+  was added; switching the Supabase template to a code is a dashboard
+  setting, not a code change, and was not done.
+- NOT touched, as instructed: AI CFO rule-based fallback (no Gemini
+  key) and bank/UPI "Not connected" — both honest and expected.
+- Verification (production build, local PostgreSQL 16, fresh DB cg_fix
+  with migrations 0000 + 0001, 14-check harness /tmp/cg-4bugs-harness.mjs
+  + 4-check client-event test /tmp/cg-api-event-test.mjs): 14/14 and
+  4/4 passed — login ok; email login logs "Signed in with email" and
+  no "Signed in with Google" entry; Chai expense, budget and note
+  visible in getState immediately after save; first INV-2026-001
+  saves, second fails 400 with the plain-language error and no SQL
+  leak, exactly one persists (total ₹1,180, not ₹2,360), rename to an
+  existing number fails, keeping the own number succeeds, raw
+  duplicate insert rejected with 23505; confirmEmailLink rejects a
+  bogus token with an email (not Google) error while googleSignIn
+  rejects the same token with a Google error; no "emailed 6-digit
+  code" promise remains in auth/pitch copy (8 "confirmation link"
+  mentions in pageAuth); built bundle contains the cg:mutated event.
+  `npx tsc --noEmit` 0 errors, `npm run build` passes. NOT pushed,
+  NOT deployed.
+
 ## 2026-11-14 — live database TLS failure (SELF_SIGNED_CERT_IN_CHAIN)
 - Symptom on live: after the negative-timeout fix (09e7c14) + DATABASE_URL
   re-entry + redeploy (A62JvjKW1), "Workspace database: Not connected"

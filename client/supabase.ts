@@ -37,6 +37,17 @@ export const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_6D9rlSGsbPzqkMVyWdrZ3w_60JseEvy";
 
 const VERIFIER_KEY = "cg_pkce_verifier";
+// Set only when "Continue with Google" was tapped in THIS tab: it is
+// how the return is told apart from an email confirmation link.
+// Supabase's signup email contains a confirmation LINK, and opening
+// it also redirects back here with ?code=… — without this flag the
+// link return was routed through the Google handler, which verified
+// the account through googleSignIn and logged “Signed in with
+// Google” for a sign-in that was email + password (live test,
+// 2026-11-14). The flag lives in sessionStorage, so it is present
+// for the same-tab Google return and absent for the (new-tab) email
+// link return.
+const GOOGLE_STARTED_KEY = "cg_google_oauth_started";
 
 function base64Url(bytes: Uint8Array): string {
   let s = "";
@@ -74,6 +85,11 @@ function appReturnUrl(): string {
  * page before this returns).
  */
 export async function startGoogleOAuth(): Promise<void> {
+  try {
+    sessionStorage.setItem(GOOGLE_STARTED_KEY, "1");
+  } catch {
+    /* storage unavailable — the return is then treated as an email link */
+  }
   const redirectTo = appReturnUrl();
   let challenge: string | null = null;
   try {
@@ -99,8 +115,11 @@ export async function startGoogleOAuth(): Promise<void> {
   );
 }
 
-/** True when the current URL carries a Supabase OAuth return
- *  (an auth code, an implicit access token, or an OAuth error). */
+/** True when the current URL carries a Supabase return — either a
+ *  Google OAuth return (an auth code, an implicit access token, or
+ *  an OAuth error) or an email confirmation LINK return, which
+ *  Supabase also delivers as ?code=…. completeGoogleCallback tells
+ *  the two apart with the cg_google_oauth_started flag. */
 export function hasGoogleCallback(): boolean {
   try {
     const hash = window.location.hash;
@@ -133,7 +152,7 @@ function cleanUrl() {
 
 export type GoogleCallbackResult =
   | { status: "none" }
-  | { status: "ok"; token: string }
+  | { status: "ok"; token: string; method: "google" | "email" }
   | { status: "error"; message: string };
 
 async function exchangeCodeForAccessToken(code: string): Promise<string> {
@@ -176,11 +195,19 @@ async function exchangeCodeForAccessToken(code: string): Promise<string> {
 }
 
 /**
- * Completes a Supabase OAuth return: pulls the code/token out of the
- * URL, cleans the URL, exchanges the code if needed, then trades the
- * Supabase access token for this app's own session via the server
- * `googleSignIn` action (which verifies the token with Supabase
- * before trusting it). Call once, on app start.
+ * Completes a Supabase return: pulls the code/token out of the URL,
+ * cleans the URL, exchanges the code if needed, then trades the
+ * Supabase access token for this app's own session. Which server
+ * action runs depends on how the return started:
+ * - "Continue with Google" was tapped in this tab (the
+ *   cg_google_oauth_started flag is set) → googleSignIn, and the
+ *   activity log records “Signed in with Google”.
+ * - No flag → this is the email confirmation LINK return (Supabase
+ *   emails a link, not a code): confirmEmailLink, which verifies the
+ *   matching local email account and logs “Signed in with email”.
+ *   The old code sent both through googleSignIn, mislabelling every
+ *   email-link sign-in as Google.
+ * Call once, on app start.
  */
 export async function completeGoogleCallback(): Promise<GoogleCallbackResult> {
   if (!hasGoogleCallback()) return { status: "none" };
@@ -199,8 +226,15 @@ export async function completeGoogleCallback(): Promise<GoogleCallbackResult> {
   if (errorText) {
     return {
       status: "error",
-      message: `Google sign-in didn't complete: ${errorText}. You can try again, or use email + password below.`,
+      message: `Sign-in didn't complete: ${errorText}. You can try again, or use email + password below.`,
     };
+  }
+  let googleStarted = false;
+  try {
+    googleStarted = sessionStorage.getItem(GOOGLE_STARTED_KEY) === "1";
+    sessionStorage.removeItem(GOOGLE_STARTED_KEY);
+  } catch {
+    googleStarted = false;
   }
   try {
     const accessToken = hashToken ?? (code ? await exchangeCodeForAccessToken(code) : null);
@@ -208,14 +242,17 @@ export async function completeGoogleCallback(): Promise<GoogleCallbackResult> {
       return {
         status: "error",
         message:
-          "Google sign-in returned without a session. Please try “Continue with Google” again.",
+          "The sign-in returned without a session. Please try again — “Continue with Google”, or the confirmation link in your email.",
       };
     }
     // Bounded like every other sign-in call: if this stalls, the
-    // "Completing your Google sign-in…" screen must end with a clear
+    // "Completing your sign-in…" screen must end with a clear
     // error the user can act on, never spin forever.
+    const method = googleStarted ? "google" : "email";
     const res = await withTimeout(
-      api.googleSignIn({ supabaseAccessToken: accessToken }),
+      method === "google"
+        ? api.googleSignIn({ supabaseAccessToken: accessToken })
+        : api.confirmEmailLink({ supabaseAccessToken: accessToken }),
       AUTH_TIMEOUT_MS,
       AUTH_TIMEOUT_MESSAGE,
     );
@@ -224,14 +261,14 @@ export async function completeGoogleCallback(): Promise<GoogleCallbackResult> {
         status: "error",
         message:
           res.error ??
-          "Your Google account was verified, but this app could not open your workspace. Please try again.",
+          "Your email was verified, but this app could not open your workspace. Please try again.",
       };
     }
-    return { status: "ok", token: res.token };
+    return { status: "ok", token: res.token, method };
   } catch (e) {
     return {
       status: "error",
-      message: `Google sign-in didn't complete: ${e instanceof Error ? e.message : String(e)}`,
+      message: `Sign-in didn't complete: ${e instanceof Error ? e.message : String(e)}.`,
     };
   }
 }

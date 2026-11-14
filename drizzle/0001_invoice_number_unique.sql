@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "invoices_owner_mode_number_unique" ON "invoices" USING btree ("owner_id","mode","number");

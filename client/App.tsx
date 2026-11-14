@@ -741,8 +741,23 @@ export function App() {
   const queryClient = useQueryClient();
   // staleTime keeps module-hopping instant: within 30s the cached state is
   // reused instead of refetching the whole ledger on every navigation or
-  // window refocus. Mutations invalidate explicitly, so data never goes stale
-  // after the user's own edits.
+  // window refocus. Freshness after the user's own edits does NOT rely
+  // on this expiring: every successful mutation dispatches a
+  // "cg:mutated" event from the API client (see client/api.ts), and
+  // the listener below invalidates the state queries immediately, so
+  // a save shows up in the same session with no reload. (Before this,
+  // most page mutations only showed a toast and never invalidated,
+  // so saves looked like they did nothing until a reload — and a
+  // re-saved invoice then became a real duplicate.)
+  useEffect(() => {
+    const onMutated = () => {
+      void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
+      void queryClient.invalidateQueries({ queryKey: ["note-versions"] });
+    };
+    window.addEventListener("cg:mutated", onMutated);
+    return () => window.removeEventListener("cg:mutated", onMutated);
+  }, [queryClient]);
   // Bounded: if the session check stalls (gateway cold start, the
   // shell credential-refresh handshake, a dropped mobile connection),
   // the query errors and the app lands on the sign-in screens — where
@@ -864,7 +879,11 @@ export function App() {
       const result = await completeGoogleCallback();
       if (result.status === "ok") {
         setAuthToken(result.token);
-        notifyRef.current("Signed in with Google — welcome to Cashflow Genius.");
+        notifyRef.current(
+          result.method === "google"
+            ? "Signed in with Google — welcome to Cashflow Genius."
+            : "Email confirmed — you're signed in. Welcome to Cashflow Genius.",
+        );
         onAuthedRef.current();
       } else if (result.status === "error") {
         notifyRef.current(result.message);

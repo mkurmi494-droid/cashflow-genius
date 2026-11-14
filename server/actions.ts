@@ -12,7 +12,7 @@
 import { defineAction, z, type ActionsModule } from "./lib/actions";
 import { and, asc, desc, eq } from "drizzle-orm";
 import * as schema from "./schema";
-import { db, checkDatabase } from "./lib/db";
+import { db, checkDatabase, dbErrorCode } from "./lib/db";
 import { aiComplete, getUserGeminiKey } from "./lib/ai";
 
 type Db = typeof db;
@@ -283,6 +283,35 @@ async function log(db: Db, action: string, detail: string, ownerId = "legacy") {
   await db.insert(schema.activityLogs).values({ action, detail, ownerId, mode });
 }
 
+/** Throws a plain-language error when another invoice in this
+ *  owner's workspace already uses this number. `exceptId` lets an
+ *  edit keep its own number. This is the user-facing guard; the
+ *  unique index on (owner_id, mode, number) is the race-proof
+ *  backstop for two saves landing at the same instant. */
+async function assertInvoiceNumberFree(
+  db: Db,
+  ownerId: string,
+  mode: string,
+  number: string,
+  exceptId?: string,
+) {
+  const clash = await db
+    .select({ id: schema.invoices.id })
+    .from(schema.invoices)
+    .where(
+      and(
+        eq(schema.invoices.ownerId, ownerId),
+        eq(schema.invoices.mode, mode),
+        eq(schema.invoices.number, number),
+      ),
+    )
+    .limit(1);
+  if (clash[0] && clash[0].id !== exceptId)
+    throw new Error(
+      `An invoice with number ${number} already exists in this workspace. Change the number and try again.`,
+    );
+}
+
 // ---------- custom categories ----------
 // Every built-in category name across all four modes (mirrors the client
 // lists in lib.ts). A saved category matching one of these (any case) is
@@ -347,16 +376,18 @@ async function rememberCustomCategory(
 //    PBKDF2 password hash; login and all records stay here), but the
 //    email address itself is verified by Supabase Auth: sign-up calls
 //    Supabase's /auth/v1/signup, Supabase emails the user a REAL
-//    6-digit OTP through its built-in free email sender, and
-//    verifyAccount checks the code the user types against Supabase's
-//    /auth/v1/otp endpoint before the local account is marked
-//    verified and a session starts. The code is never generated,
-//    stored or shown by this app — it exists only in the user's
-//    inbox and inside Supabase. Free-tier honesty: Supabase's built-in
-//    sender allows only a few auth emails per HOUR for the whole
-//    project, so sign-ups can hit its rate limit; when that happens
-//    the actions say so plainly instead of pretending an email went
-//    out. Phone/mobile sign-up and login were removed (no SMS OTP —
+//    confirmation LINK through its built-in free email sender, and
+//    opening the link signs the account in (confirmEmailLink verifies
+//    the returned Supabase token server-side). A 6-digit code is only
+//    a fallback: if an email also carries one, verifyAccount checks
+//    the code the user types against Supabase's /auth/v1/otp endpoint
+//    before the local account is marked verified and a session
+//    starts. The link and code are never generated, stored or shown
+//    by this app — they exist only in the user's inbox and inside
+//    Supabase. Free-tier honesty: Supabase's built-in sender allows
+//    only a few auth emails per HOUR for the whole project, so
+//    sign-ups can hit its rate limit; when that happens the actions
+//    say so plainly instead of pretending an email went out. Phone/mobile sign-up and login were removed (no SMS OTP —
 //    SMS is never free); a phone number can only be an optional
 //    profile detail, never a sign-in method. Accounts created with a
 //    mobile number before the removal keep working with their number
@@ -374,13 +405,13 @@ async function rememberCustomCategory(
 // Every data action requires a verified session and scopes every
 // read and write to that account's owner_id.
 
-// ---------- Supabase (Google sign-in + email OTP verification) ----------
+// ---------- Supabase (Google sign-in + email verification) ----------
 // The project the app owner created for Cashflow Genius. The
 // publishable (anon) key is a PUBLIC client key: it identifies the
 // project and is safe in client code. No secret / service-role key
 // and no Google Client Secret is used or stored anywhere in this
 // artifact — those live only in the Supabase / Google dashboards.
-// Supabase provides identity only (Google OAuth + email OTP); all
+// Supabase provides identity only (Google OAuth + email verification); all
 // records stay in this workspace's own database, scoped by owner_id.
 
 const SUPABASE_URL =
@@ -488,16 +519,20 @@ async function supabaseUserForToken(
   }
 }
 
-// ---------- Supabase email OTP (sign-up verification) ----------
+// ---------- Supabase email verification (sign-up) ----------
 // Email verification runs on Supabase Auth's email provider with
 // Supabase's built-in (free) email sender: this server calls the
-// Supabase Auth REST API with the publishable key, Supabase generates
-// the 6-digit OTP and emails it to the user's own address, and the
-// code is checked by Supabase — this app never sees, stores or shows
-// the code. The built-in sender is rate-limited to a few auth emails
-// per hour for the whole project (free tier), so every helper maps
-// Supabase's `over_email_send_rate_limit` answer to a plain message
-// instead of pretending an email was sent.
+// Supabase Auth REST API with the publishable key, Supabase emails a
+// confirmation LINK to the user's own address (the live test of
+// 2026-11-14 proved the email carries a link, not a 6-digit code,
+// despite the sign-up page once promising a code), and opening the
+// link signs the account in via confirmEmailLink. A code is only a
+// fallback: if an email also carries one, verifyAccount checks it
+// against Supabase — this app never sees, stores or shows the link
+// or the code. The built-in sender is rate-limited to a few auth
+// emails per hour for the whole project (free tier), so every helper
+// maps Supabase's `over_email_send_rate_limit` answer to a plain
+// message instead of pretending an email was sent.
 
 type SupabaseAuthResult =
   | { ok: true; alreadyRegistered: boolean; emailConfirmed: boolean }
@@ -517,7 +552,7 @@ function supabaseAuthErrorMessage(
   if (code === "weak_password")
     return "That password is too weak for Supabase's sign-up rules — please choose a longer one with a mix of letters and numbers.";
   if (code === "otp_expired" || code === "otp_disabled")
-    return "That code is incorrect or has expired. Codes from the email last 1 hour — use “Send a new code” below and enter the newest one.";
+    return "That code is incorrect or has expired. Codes from the email last 1 hour — use “Send a new link” below and tap the newest one.";
   if (raw) return raw;
   return fallback;
 }
@@ -571,7 +606,7 @@ async function supabaseAuthCall(
 }
 
 /** Starts a Supabase email sign-up: Supabase creates the (unconfirmed)
- *  Auth user and emails the 6-digit OTP. `alreadyRegistered` is true
+ *  Auth user and emails the confirmation link. `alreadyRegistered` is true
  *  when Supabase reports the email is already registered (it answers
  *  with a user whose identities list is empty, to avoid leaking which
  *  emails exist) — no fresh email is sent in that case, so the caller
@@ -609,9 +644,10 @@ async function supabaseEmailSignup(
   };
 }
 
-/** Asks Supabase to email a fresh sign-up OTP for an unconfirmed
- *  address. Supabase answers {} whether or not the address exists,
- *  so a 2xx here means "request accepted", never proof of an account. */
+/** Asks Supabase to email a fresh sign-up confirmation link for an
+ *  unconfirmed address. Supabase answers {} whether or not the
+ *  address exists, so a 2xx here means "request accepted", never
+ *  proof of an account. */
 async function supabaseResendSignupEmail(
   email: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -631,14 +667,16 @@ async function supabaseResendSignupEmail(
     error: supabaseAuthErrorMessage(
       status,
       data,
-      "Supabase could not send a new code just now.",
+      "Supabase could not send a new confirmation link just now.",
     ),
   };
 }
 
 /** Checks the 6-digit code the user typed against Supabase
  *  (POST /auth/v1/otp, type "signup", falling back to type "email"
- *  for codes Supabase issued as a generic email OTP). Success returns
+ *  for codes Supabase issued as a generic email OTP). This is only
+ *  the fallback path — the email Supabase actually sends carries a
+ *  confirmation link, handled by confirmEmailLink. Success returns
  *  a Supabase session whose user must carry the same email address —
  *  anything else is rejected. */
 async function supabaseVerifySignupOtp(
@@ -685,7 +723,7 @@ async function supabaseVerifySignupOtp(
   return {
     ok: false,
     error:
-      "That code is incorrect or has expired. Codes from the email last 1 hour — use “Send a new code” and enter the newest one.",
+      "That code is incorrect or has expired. Codes from the email last 1 hour — use “Send a new link” and tap the newest one.",
   };
 }
 
@@ -3032,21 +3070,36 @@ export const Actions = {
         if (!existing[0]) throw new Error("Invoice not found.");
         if (existing[0].status === "paid")
           throw new Error("Paid invoices cannot be edited.");
-        await db
-          .update(schema.invoices)
-          .set({
-            number: args.number,
-            customerName: args.customerName,
-            customerEmail: args.customerEmail,
-            status: args.status,
-            issueDate: args.issueDate,
-            dueDate: args.dueDate,
-            discountBp: Math.round(args.discountPct * 100),
-            taxBp: Math.round(args.taxPct * 100),
-            notes: args.notes,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(schema.invoices.id, args.id), and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode))));
+        // Renaming to a number another invoice in this workspace
+        // already uses is a duplicate — stop it here with a plain
+        // message instead of letting the database reject it.
+        // (Keeping the same number on THIS invoice is fine.)
+        if (args.number !== existing[0].number) {
+          await assertInvoiceNumberFree(db, user.id, wsMode, args.number, args.id);
+        }
+        try {
+          await db
+            .update(schema.invoices)
+            .set({
+              number: args.number,
+              customerName: args.customerName,
+              customerEmail: args.customerEmail,
+              status: args.status,
+              issueDate: args.issueDate,
+              dueDate: args.dueDate,
+              discountBp: Math.round(args.discountPct * 100),
+              taxBp: Math.round(args.taxPct * 100),
+              notes: args.notes,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(schema.invoices.id, args.id), and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode))));
+        } catch (e) {
+          if (dbErrorCode(e) === "23505")
+            throw new Error(
+              `An invoice with number ${args.number} already exists in this workspace. Change the number and try again.`,
+            );
+          throw e;
+        }
         await db
           .delete(schema.invoiceItems)
           .where(eq(schema.invoiceItems.invoiceId, args.id));
@@ -3055,21 +3108,37 @@ export const Actions = {
         /* no query invalidation on Vercel — the client refetches after mutations */
         return { id: args.id };
       }
+      // A second invoice with the same number in the same workspace
+      // is a duplicate: the live test (2026-11-14) ended up with two
+      // identical INV-2026-001 rows because the first save looked
+      // like it did nothing (stale UI) and was saved again — and
+      // nothing stopped it. Check first for a plain-language error,
+      // and the unique index on (owner_id, mode, number) is the
+      // race-proof backstop below.
+      await assertInvoiceNumberFree(db, user.id, wsMode, args.number);
       const id = uid();
-      await db.insert(schema.invoices).values({
-        id,
-        ownerId: user.id,
-        mode: wsMode,
-        number: args.number,
-        customerName: args.customerName,
-        customerEmail: args.customerEmail,
-        status: args.status,
-        issueDate: args.issueDate,
-        dueDate: args.dueDate,
-        discountBp: Math.round(args.discountPct * 100),
-        taxBp: Math.round(args.taxPct * 100),
-        notes: args.notes,
-      });
+      try {
+        await db.insert(schema.invoices).values({
+          id,
+          ownerId: user.id,
+          mode: wsMode,
+          number: args.number,
+          customerName: args.customerName,
+          customerEmail: args.customerEmail,
+          status: args.status,
+          issueDate: args.issueDate,
+          dueDate: args.dueDate,
+          discountBp: Math.round(args.discountPct * 100),
+          taxBp: Math.round(args.taxPct * 100),
+          notes: args.notes,
+        });
+      } catch (e) {
+        if (dbErrorCode(e) === "23505")
+          throw new Error(
+            `An invoice with number ${args.number} already exists in this workspace. Change the number and try again.`,
+          );
+        throw e;
+      }
       await db.insert(schema.invoiceItems).values(itemValues(id));
       await log(db, "Invoice created", args.number, user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
@@ -4702,7 +4771,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   getSupabaseAuthStatus: defineAction({
     description:
-      "Public live check of the connected Supabase project (no sign-in needed): asks Supabase Auth for its own settings and reports whether the project answered and whether its Google and Email providers are enabled. It ALSO runs a real database probe (connect + auth_users table present) — the signed-out “What's connected” strip only shows the workspace database as Live when this probe actually answers, because the Auth REST check alone cannot prove the database works (it uses the publishable key, not DATABASE_URL, so it stayed Live while every database query failed). Used by the signed-out screens' “What's connected” strip so Google sign-in and email OTP verification are only ever shown as connected after this real check succeeds.",
+      "Public live check of the connected Supabase project (no sign-in needed): asks Supabase Auth for its own settings and reports whether the project answered and whether its Google and Email providers are enabled. It ALSO runs a real database probe (connect + auth_users table present) — the signed-out “What's connected” strip only shows the workspace database as Live when this probe actually answers, because the Auth REST check alone cannot prove the database works (it uses the publishable key, not DATABASE_URL, so it stayed Live while every database query failed). Used by the signed-out screens' “What's connected” strip so Google sign-in and email verification are only ever shown as connected after this real check succeeds.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       configured: z.boolean(),
@@ -4827,6 +4896,60 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
     },
   }),
 
+  confirmEmailLink: defineAction({
+    description:
+      "Completes an EMAIL sign-up confirmation that arrived as a link, not a code. Supabase's signup email contains a confirmation link; opening it redirects back here with an auth code, which the client exchanges for a Supabase access token. This action verifies that token directly with Supabase (/auth/v1/user) and only then marks the matching local email account verified and signs it in — it never creates an account (the local account is created by the app's own email sign-up first) and it never calls the sign-in Google, so the activity log honestly records an email sign-in. This is the fix for the 2026-11-14 live test, where the confirmation-link return was routed through the Google callback handler and Settings → Recent activity wrongly showed “Signed in with Google” for a sign-in that was email + password.",
+    request: z.object({
+      supabaseAccessToken: z.string().min(10).max(4096),
+    }),
+    response: z.object({
+      ok: z.boolean(),
+      error: z.string().nullable(),
+      token: z.string().nullable(),
+      identifier: z.string().nullable(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const identity = await supabaseUserForToken(args.supabaseAccessToken);
+      if (!identity)
+        return {
+          ok: false,
+          error:
+            "Supabase did not verify that email confirmation, so no account was opened. Please tap the confirmation link in your email again, or log in with your email + password.",
+          token: null,
+          identifier: null,
+        };
+      const identifier = identity.email;
+      const rows = await db
+        .select()
+        .from(schema.authUsers)
+        .where(eq(schema.authUsers.identifier, identifier))
+        .limit(1);
+      if (!rows[0])
+        return {
+          ok: false,
+          error:
+            "No Cashflow Genius account is waiting for verification under that email address. Please sign up in the app first, then tap the confirmation link.",
+          token: null,
+          identifier: null,
+        };
+      const userId = rows[0].id;
+      // The email link proves ownership of this address, so an
+      // unverified local account with the same email is verified by
+      // it; a verified account simply signs in.
+      if (rows[0].verified !== 1) {
+        await db
+          .update(schema.authUsers)
+          .set({ verified: 1, updatedAt: new Date() })
+          .where(eq(schema.authUsers.id, userId));
+      }
+      const token = await startSession(db, userId);
+      await log(db, "Signed in with email", identifier, userId);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true, error: null, token, identifier };
+    },
+  }),
+
   getIntegrationStatus: defineAction({
     description:
       "Reports the live connection status of each integration, verified server-side at call time: the workspace database is probed with a real read of the signed-in account's business row, the AI engine is probed with a real one-word inference call, and Supabase / Google sign-in are probed against the connected Supabase project's real Auth settings — Google sign-in shows Live only when Supabase itself reports the Google provider enabled. Gemini and bank/UPI sync have no connection wired, so they are honestly reported as not connected, with what is needed to connect them.",
@@ -4907,7 +5030,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
             name: "Supabase",
             status: sbProbe.reachable ? ("live" as const) : ("not_connected" as const),
             detail: sbProbe.reachable
-              ? "Connected — the Cashflow Genius Supabase project answered a live Auth settings check just now. Supabase powers Google sign-in and email OTP verification (sign-up codes are emailed by Supabase's free built-in sender, which allows only a few auth emails per hour); your records live in Supabase Postgres, scoped to your account."
+              ? "Connected — the Cashflow Genius Supabase project answered a live Auth settings check just now. Supabase powers Google sign-in and email verification (sign-up confirmation links are emailed by Supabase's free built-in sender, which allows only a few auth emails per hour); your records live in Supabase Postgres, scoped to your account."
               : "The connected Supabase project did not answer a live Auth check just now, so it is honestly not shown as connected. Your records and existing sessions are unaffected.",
             needed: sbProbe.reachable
               ? ""
@@ -4950,7 +5073,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   register: defineAction({
     description:
-      "Creates a new EMAIL + password account and starts real email verification: Supabase Auth's email provider is asked to sign the address up, and Supabase emails a 6-digit OTP to the user's own inbox through its built-in free sender — the code is never generated or shown by this app. The local account row stays unverified until verifyAccount confirms the code with Supabase. Phone/mobile sign-up no longer exists (no free SMS OTP exists), and Supabase's free sender allows only a few auth emails per hour, so a rate-limited sign-up says so honestly instead of pretending an email went out.",
+      "Creates a new EMAIL + password account and starts real email verification: Supabase Auth's email provider is asked to sign the address up, and Supabase emails a confirmation LINK to the user's own inbox through its built-in free sender — opening the link signs the account in (confirmEmailLink). A 6-digit code is only a fallback for emails that also carry one (verifyAccount). The code/link is never generated or shown by this app. The local account row stays unverified until the link is opened or the code is confirmed with Supabase. Phone/mobile sign-up no longer exists (no free SMS OTP exists), and Supabase's free sender allows only a few auth emails per hour, so a rate-limited sign-up says so honestly instead of pretending an email went out.",
     request: z.object({
       email: z.string().min(3).max(160),
       password: z.string().min(8).max(200),
@@ -4982,7 +5105,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
             "An account with this email address already exists. Please log in instead — or use “Continue with Google” if that's how you signed up.",
         };
       // Real step: Supabase Auth sign-up. Supabase creates the
-      // unconfirmed Auth user and emails the 6-digit OTP itself.
+      // unconfirmed Auth user and emails the confirmation link itself.
       const sb = await supabaseEmailSignup(identifier, args.password);
       if (!sb.ok) return { ok: false, error: sb.error };
       if (sb.alreadyRegistered && !existing[0]) {
@@ -5003,7 +5126,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
       if (existing[0]) {
         // Unverified local account re-registering (it may predate
         // email verification or never finished it): refresh its
-        // password. Supabase was asked first (above), so the OTP that
+        // password. Supabase was asked first (above), so the link that
         // arrives in the inbox belongs to THIS sign-up attempt.
         await db
           .update(schema.authUsers)
@@ -5036,7 +5159,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   verifyAccount: defineAction({
     description:
-      "Verifies a new email account with the 6-digit OTP from the user's own inbox: the code is checked by Supabase Auth (POST /auth/v1/otp), and only when Supabase confirms it is the local account marked verified and signed in. Every account starts with its own empty workspace; pre-authentication records stay quarantined under their unowned marker and are never served to any account.",
+      "Verifies a new email account with the 6-digit code from the user's own inbox (fallback path — the email Supabase actually sends carries a confirmation link, handled by confirmEmailLink): the code is checked by Supabase Auth (POST /auth/v1/otp), and only when Supabase confirms it is the local account marked verified and signed in. Every account starts with its own empty workspace; pre-authentication records stay quarantined under their unowned marker and are never served to any account.",
     request: z.object({
       email: z.string().min(3).max(160),
       code: z.string().min(4).max(10),
@@ -5089,6 +5212,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         .set({ verified: 1, updatedAt: new Date() })
         .where(eq(schema.authUsers.id, u.id));
       const token = await startSession(db, u.id);
+      await log(db, "Signed in with email", identifier, u.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { ok: true, error: null, token };
     },
@@ -5096,7 +5220,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   resendEmailOtp: defineAction({
     description:
-      "Asks Supabase Auth to email a fresh 6-digit sign-up OTP to the given address (used by the verification screen's “Send a new code”). Only meaningful for an unverified account created through this app's email sign-up; Supabase's free sender allows only a few auth emails per hour, so a rate-limited resend says so honestly.",
+      "Asks Supabase Auth to email a fresh sign-up confirmation link to the given address (used by the verification screen's “Send a new link”). Only meaningful for an unverified account created through this app's email sign-up; Supabase's free sender allows only a few auth emails per hour, so a rate-limited resend says so honestly.",
     request: z.object({
       email: z.string().min(3).max(160),
     }),
@@ -5134,7 +5258,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   login: defineAction({
     description:
-      "Signs in with a registered email address and password. An unverified email account is sent to the verification screen and Supabase is asked to email a fresh OTP (never shown in the app). Mobile-number sign-in was removed for new accounts; an already-verified account created earlier with a mobile number can still sign in with that number + password, while an unverified one honestly explains it can no longer be verified (no SMS OTP exists) and to sign up with an email address instead. Wrong credentials get a clear error and no session.",
+      "Signs in with a registered email address and password. An unverified email account is sent to the verification screen and Supabase is asked to email a fresh confirmation link (never shown in the app). Mobile-number sign-in was removed for new accounts; an already-verified account created earlier with a mobile number can still sign in with that number + password, while an unverified one honestly explains it can no longer be verified (no SMS OTP exists) and to sign up with an email address instead. Wrong credentials get a clear error and no session.",
     request: z.object({
       identifier: z.string().min(3).max(160),
       password: z.string().min(1).max(200),
@@ -5196,9 +5320,10 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
             token: null,
           };
         }
-        // Ask Supabase to email a fresh OTP for the pending sign-up,
-        // then send the user to the verification screen. The code
-        // exists only in their inbox — it is never returned here.
+        // Ask Supabase to email a fresh confirmation link for the
+        // pending sign-up, then send the user to the verification
+        // screen. The link exists only in their inbox — it is never
+        // returned here.
         const rs = await supabaseResendSignupEmail(found.identifier);
         if (!rs.ok) {
           return {
@@ -5211,12 +5336,13 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         return {
           ok: false,
           error:
-            "This account hasn't been verified yet. A fresh 6-digit code has been emailed to you — enter it to finish setting up your account.",
+            "This account hasn't been verified yet. A fresh confirmation link has been emailed to you — tap it to finish setting up your account.",
           needsVerification: true,
           token: null,
         };
       }
       const token = await startSession(db, u.id);
+      await log(db, "Signed in with email", found.identifier, u.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return {
         ok: true,

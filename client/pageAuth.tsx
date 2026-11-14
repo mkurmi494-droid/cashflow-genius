@@ -309,10 +309,10 @@ function SetupNotice() {
       <strong>Account setup note:</strong> Two ways in, both through
       Supabase Auth. “Continue with Google” signs you in with your own
       Google account, into your own private workspace. Or sign up with
-      your email + a password: Supabase emails a real 6-digit code to
+      your email + a password: Supabase emails a confirmation link to
       your own inbox (its free built-in sender — only a few emails per
-      hour, so it can occasionally ask you to wait), and you type that
-      code here to verify; the code is never shown in this app.
+      hour, so it can occasionally ask you to wait), and you tap that
+      link to verify; the link is never shown in this app.
       Mobile-number sign-up is not offered — there is no free SMS OTP,
       so a phone number can never be a sign-in method here (it can be
       saved later as an optional profile detail). Password reset for
@@ -456,7 +456,7 @@ function ConnectionStrip() {
       note: checking
         ? "Checking with Supabase…"
         : sbLive
-          ? "Project connected — powers Google sign-in + email OTP"
+          ? "Project connected — powers Google sign-in + email verification"
           : "Project didn't answer the live check just now",
     },
     {
@@ -469,12 +469,12 @@ function ConnectionStrip() {
           : "Not confirmed by the live check just now",
     },
     {
-      name: "Email OTP verification",
+      name: "Email verification",
       state: checking ? "checking" : emailLive ? "live" : "off",
       note: checking
         ? "Checking with Supabase…"
         : emailLive
-          ? "Sign-up codes emailed by Supabase's free sender (a few per hour)"
+          ? "Sign-up confirmation links emailed by Supabase's free sender (a few per hour)"
           : "Not confirmed by the live check just now",
     },
     { name: "Google Gemini", state: "off", note: "No Gemini connection wired yet" },
@@ -673,7 +673,7 @@ export function PublicHome({
           </button>
         </div>
         <p className="mt-3 text-center text-xs leading-relaxed text-[var(--dim)]">
-          New here? Sign up with your email — Supabase emails you a 6-digit code to
+          New here? Sign up with your email — Supabase emails you a confirmation link to
           verify it — or just continue with Google. Your workspace starts empty,
           with only your own records, and a short app tour shows you everything
           right after setup. It can be skipped any time.
@@ -828,7 +828,7 @@ export function LoginScreen({
 }
 
 // ------------------------------------------------------------------
-// Sign up (email + password, then a real emailed OTP code)
+// Sign up (email + password, then a real emailed confirmation link)
 // ------------------------------------------------------------------
 
 export function SignupScreen({
@@ -871,7 +871,7 @@ export function SignupScreen({
         return;
       }
       notify(
-        "Account created — check your inbox: we emailed you a 6-digit verification code.",
+        "Account created — check your inbox: we emailed you a confirmation link. Tap it to finish setting up your account.",
       );
       onVerify(identifier);
     } catch (err) {
@@ -922,13 +922,13 @@ export function SignupScreen({
           <strong className="text-[var(--text)]">
             How verification works:
           </strong>{" "}
-          the moment you tap Sign Up, Supabase emails a real 6-digit code
-          to this address (free built-in sender). Open your inbox, type
-          the code on the next screen, and your account is active — the
-          code is never shown inside this app. The free sender allows
-          only a few emails per hour, so if it is busy the app will tell
-          you to wait a little rather than pretend. (Google accounts skip
-          the code entirely — Google verifies you itself.)
+          the moment you tap Sign Up, Supabase emails a confirmation link
+          to this address (free built-in sender). Open your inbox, tap
+          the link, and your account is active — the link is never shown
+          inside this app. The free sender allows only a few emails per
+          hour, so if it is busy the app will tell you to wait a little
+          rather than pretend. (Google accounts skip this entirely —
+          Google verifies you itself.)
         </p>
         <p className="text-xs leading-relaxed text-[var(--dim)]">
           <strong className="text-[var(--text)]">No mobile sign-up:</strong>{" "}
@@ -969,10 +969,12 @@ export function SignupScreen({
 }
 
 // ------------------------------------------------------------------
-// Verification — the 6-digit OTP from the user's own email inbox.
-// Supabase generated the code and emailed it; Supabase checks what
-// the user types (via the server's verifyAccount action). Nothing
-// about the code is ever shown in this app.
+// Verification — after sign-up. Supabase emails a confirmation LINK
+// (not a code): tapping it signs the account in. The code box below
+// is a fallback for the rare email that also carries a code —
+// Supabase checks what the user types (via the server's
+// verifyAccount action). Nothing about the link or code is ever
+// shown in this app.
 // ------------------------------------------------------------------
 
 export function VerifyScreen({
@@ -1033,11 +1035,11 @@ export function VerifyScreen({
         AUTH_TIMEOUT_MESSAGE,
       );
       if (!res.ok) {
-        setError(res.error ?? "A new code couldn't be sent just now.");
+        setError(res.error ?? "A new link couldn't be sent just now.");
         return;
       }
       setNotice(
-        "A new code is on its way to your inbox. Enter the newest one — older codes stop working.",
+        "A new confirmation link is on its way to your inbox. Tap the newest one — older links stop working.",
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1049,12 +1051,12 @@ export function VerifyScreen({
   return (
     <AuthCard
       title="Check your email"
-      subtitle={`We emailed a 6-digit verification code to ${identifier || "your email address"}. Enter it below — it stays valid for 1 hour.`}
+      subtitle={`We emailed a confirmation link to ${identifier || "your email address"}. Tap the link in the email to finish setting up your account — it stays valid for 1 hour. If your email also contains a 6-digit code, you can enter it below instead.`}
     >
       <div className="space-y-4">
         <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-left text-xs leading-relaxed text-[var(--dim)]">
           The email comes from Supabase (this app&rsquo;s sign-in provider) and
-          the code exists only in your inbox — it is never shown here. Check
+          the link exists only in your inbox — it is never shown here. Check
           your spam / promotions folder if it doesn&rsquo;t arrive in a
           minute or two. Supabase&rsquo;s free sender allows only a few
           emails per hour, so a resend can occasionally ask you to wait.
@@ -1099,7 +1101,7 @@ export function VerifyScreen({
             onClick={() => void resend()}
             disabled={resending || busy}
           >
-            {resending ? "Sending…" : "Send a new code"}
+            {resending ? "Sending…" : "Send a new link"}
           </button>
           <button
             type="button"

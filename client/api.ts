@@ -91,6 +91,44 @@ export async function withTimeout<T>(
   }
 }
 
+// ---- state refresh after mutations (bug fix, 2026-11-14) ----
+// The ledger is read through React Query (["cg-state"], 30s staleTime)
+// and most page mutations used to only show a toast — they never
+// invalidated or refetched that query, so a save looked like it did
+// nothing until the next page reload (and a second save of the same
+// invoice then created a real duplicate). The server even comments
+// "the client refetches after mutations" — but it didn't.
+//
+// Fix, centralised here so no individual mutation can forget it:
+// every successful call that is NOT a pure read dispatches a
+// "cg:mutated" event, and App.tsx listens for it and invalidates
+// the state queries. Reads are excluded so a refetch can never
+// re-trigger itself (getState → event → refetch → …).
+const READ_ONLY_ACTIONS = new Set([
+  "getState",
+  "getCombinedSummary",
+  "authStatus",
+  "getSupabaseAuthStatus",
+  "getIntegrationStatus",
+  "exportBackup",
+  "listNoteVersions",
+  "requestPasswordReset",
+  "resendEmailOtp",
+]);
+
+function notifyMutation(name: string): void {
+  if (READ_ONLY_ACTIONS.has(name)) return;
+  try {
+    if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(
+        new CustomEvent("cg:mutated", { detail: { action: name } }),
+      );
+    }
+  } catch {
+    /* event dispatch must never break the call itself */
+  }
+}
+
 async function callAction(
   name: string,
   args: Record<string, unknown>,
@@ -107,6 +145,9 @@ async function callAction(
       `Request failed (${res.status})`;
     throw new Error(msg);
   }
+  // Only a successful mutation refreshes the views: a failed save
+  // must not pretend the (unchanged) data is new.
+  notifyMutation(name);
   return data;
 }
 

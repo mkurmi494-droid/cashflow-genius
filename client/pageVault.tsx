@@ -1381,7 +1381,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             equivalent of the brief's Supabase/Postgres design (same ownership-checked,
             validate-on-the-server model; amounts are stored as exact integer minor
             units, never floats). The connected Supabase project is used for
-            identity only — Google sign-in and email OTP verification — no
+            identity only — Google sign-in and email verification — no
             records are stored in Supabase.
           </li>
           <li>
@@ -1400,7 +1400,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             the server verifies your Supabase token with Supabase before opening
             anything, and your Google email maps to your own account here, with
             its own empty workspace if you are new. Or sign up with an email
-            address and a password, and verify with the real 6-digit code
+            address and a password, and verify by tapping the confirmation link
             Supabase emails to your own inbox (its free built-in sender,
             checked by Supabase itself — never generated or shown by this
             app); every record is stored against your account only

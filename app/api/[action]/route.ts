@@ -17,6 +17,7 @@ const NO_TOKEN_ACTIONS = new Set([
   "resendEmailOtp",
   "login",
   "googleSignIn",
+  "confirmEmailLink",
   "requestPasswordReset",
   "purgeDemoAccount",
 ]);
