@@ -60,6 +60,47 @@ Two fixes found by testing and fixed in the port:
   all JS chunks serve 200, but no browser drove the UI here)
 - Gemini AI answers with a real key (no key exists yet)
 
+## 2026-11-14 — live database TLS failure (SELF_SIGNED_CERT_IN_CHAIN)
+- Symptom on live: after the negative-timeout fix (09e7c14) + DATABASE_URL
+  re-entry + redeploy (A62JvjKW1), "Workspace database: Not connected"
+  persisted. Vercel Runtime Logs now proved the cause:
+  `[cashflow-genius] checkDatabase failed: code=SELF_SIGNED_CERT_IN_CHAIN
+  self-signed certificate in certificate chain` (x3, from
+  /api/getSupabaseAuthStatus) + probe timeouts after 5s. NOT a wrong
+  password, NOT the postgres-js reconnect bug.
+- Root cause: db.ts created the postgres-js client with `ssl: true`
+  (boolean) for non-localhost hosts, so Node strictly verified the
+  certificate chain. Supabase's pooler
+  (aws-1-ap-southeast-2.pooler.supabase.com:5432) presents a chain Node
+  does not trust, so the TLS handshake failed and every query timed out.
+- Fix: for hosted (non-localhost) hosts the client now uses
+  `ssl: { rejectUnauthorized: false }` — the connection is still
+  encrypted, the password is never sent in cleartext; localhost keeps
+  SSL off entirely. `prepare: false`, `max: 1`, timeouts unchanged.
+  Single client construction (server/lib/db.ts) — the fix covers every
+  DB call path (auth sign-up/login use the same client). Also added a
+  plain-language mapping for SELF_SIGNED_CERT_IN_CHAIN in
+  dbErrorMessage, so that error can never again surface as raw text.
+- Verification (production build, local PostgreSQL 16, 16-check harness
+  /tmp/cg-tls-harness.mjs): old `ssl: true` against a local Postgres
+  with a self-signed cert fails with a certificate-chain error
+  (DEPTH_ZERO_SELF_SIGNED_CERT for a bare self-signed cert — same
+  strict-verification rejection class as the pooler's
+  SELF_SIGNED_CERT_IN_CHAIN); new `ssl: { rejectUnauthorized: false }`
+  connects; the production server against that SSL instance via
+  `?sslmode=require` reports databaseLive:true, tablesReady:true and
+  login works (the real db.ts code path); plain local Postgres: probe
+  live, login ok, wrong password rejected, Rs500 Chai expense persists,
+  invoice paid creates exactly one income (second call alreadyPaid),
+  savings deposit Rs5000, still live after 25s idle reuse with no
+  negative-timeout warning; wrong DB password -> code 28P01, server log
+  carries "checkDatabase failed: code=28P01", password never leaked;
+  empty DB -> tablesReady:false; DATABASE_URL unset -> NO_DATABASE_URL.
+  Harness reported 15/16 on the clean re-run; the one "failure" was a
+  harness timing artifact (500ms wait too short for the log line to
+  flush) — re-checked directly, the log line is present. `npx tsc
+  --noEmit` 0 errors, `npm run build` passes. NOT pushed, NOT deployed.
+
 ## 2026-11-14 — live-check negative-timeout fix (postgres 3.4.5 -> 3.4.9)
 - Symptom on live: after DATABASE_URL was re-entered + redeployed,
   "Workspace database: Not connected"; Vercel Runtime Logs showed only

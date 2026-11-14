@@ -35,7 +35,16 @@ const needsSsl = url
   : false;
 const client = url
   ? postgres(url, {
-      ssl: needsSsl,
+      // Supabase's pooler (aws-1-ap-southeast-2.pooler.supabase.com)
+      // presents a certificate chain Node does not trust, so strict
+      // verification (ssl: true) fails the TLS handshake with
+      // SELF_SIGNED_CERT_IN_CHAIN and every query times out — the
+      // live site proved this in Vercel Runtime Logs (deployment
+      // A62JvjKW1). Pass an SSL object that does not reject the
+      // chain for hosted (non-localhost) hosts instead; the
+      // connection is still encrypted, and the password is never
+      // sent in cleartext. Localhost keeps ssl off entirely.
+      ssl: needsSsl ? { rejectUnauthorized: false } : false,
       max: 1,
       // Supabase's poolers (Supavisor) do not reliably support the
       // extended-protocol prepared statements postgres-js sends by
@@ -129,6 +138,11 @@ export function dbErrorMessage(e: unknown): string {
       return "The database named in the server settings doesn't exist. Please check DATABASE_URL in Vercel → Settings → Environment Variables.";
     case "42501":
       return "The database user doesn't have permission to read the app's tables. Please check the database user in DATABASE_URL.";
+    case "SELF_SIGNED_CERT_IN_CHAIN":
+      // The database server's TLS certificate chain was rejected
+      // during the handshake. The connection is encrypted but the
+      // chain is not trusted by the server runtime.
+      return "The app couldn't verify the database server's security certificate. Please check the database connection settings and try again in a moment.";
     default:
       break;
   }
