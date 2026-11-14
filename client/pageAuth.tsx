@@ -433,7 +433,13 @@ function ConnectionStrip() {
             : "Database answered, but its tables aren't set up yet"
           : sb.data?.databaseErrorCode === "28P01"
             ? "Database didn't answer — its sign-in (DATABASE_URL password) looks wrong"
-            : "Database didn't answer the live check just now — sign-in can't work until it does",
+            : sb.data?.databaseErrorCode === "42P01"
+              ? "Database answered, but its tables aren't set up yet — the setup migration needs to run"
+              : sb.data?.databaseErrorCode === "NO_DATABASE_URL"
+                ? "Database isn't configured on the server yet (DATABASE_URL is missing)"
+                : sb.data?.databaseErrorCode === "TIMEOUT"
+                  ? "Database took too long to answer the live check — try again in a moment"
+                  : "Database didn't answer the live check just now — sign-in can't work until it does",
     },
     {
       name: "AI CFO engine",

@@ -4721,19 +4721,32 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
       // the sign-in screen: 5s, then report unreachable. The probe
       // returns only booleans + a Postgres error code (e.g. 28P01
       // for a wrong database password) — never SQL or credentials.
+      // The probe promise is also given a logging tail: if the 5s
+      // race below fires first, the probe's eventual outcome is
+      // still written to the server log, so a slow-but-real failure
+      // (wrong password, unreachable host) never vanishes silently
+      // behind a bare TIMEOUT.
+      const probePromise = checkDatabase();
+      void probePromise.then((r) => {
+        if (!r.reachable)
+          console.error(
+            `[cashflow-genius] getSupabaseAuthStatus database probe failed: code=${r.code ?? "unknown"}`,
+          );
+      });
       const dbProbe = await Promise.race([
-        checkDatabase(),
+        probePromise,
         new Promise<{ reachable: false; tablesReady: false; code: string }>(
           (resolve) =>
-            setTimeout(
-              () =>
-                resolve({
-                  reachable: false,
-                  tablesReady: false,
-                  code: "TIMEOUT",
-                }),
-              5000,
-            ),
+            setTimeout(() => {
+              console.error(
+                "[cashflow-genius] getSupabaseAuthStatus database probe timed out after 5s (returning TIMEOUT; the probe's own result is still logged when it lands)",
+              );
+              resolve({
+                reachable: false,
+                tablesReady: false,
+                code: "TIMEOUT",
+              });
+            }, 5000),
         ),
       ]);
       return {

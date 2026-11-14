@@ -1,13 +1,14 @@
 // Supabase Postgres connection (Drizzle, postgres-js driver).
-// DATABASE_URL must be the Supabase Postgres connection string — use the
-// Session Pooler URL from the Supabase dashboard (Project Settings →
-// Database → Connection string, Session pooler port 5432, with
-// ?sslmode=require) so Vercel's serverless functions can connect.
-// (The Transaction pooler is port 6543; either pooler works here
-// because prepared statements are disabled below — Supavisor's
-// transaction mode does not support them, and a pooled session can
-// also serve a stale prepared statement. The earlier docs wrongly
-// called 6543 the session pooler port; 5432 is the session pooler.)
+// DATABASE_URL must be the Supabase Postgres connection string —
+// either the Session Pooler URL (Project Settings → Database →
+// Connection string, Session pooler port 5432, with
+// ?sslmode=require) or the Direct connection URL
+// (db.<project-ref>.supabase.co:5432, no sslmode param): both work
+// here, because SSL is required for any non-localhost host (see
+// needsSsl below), prepared statements are disabled, and only one
+// connection is kept. (The Transaction pooler is port 6543; it
+// works too. The earlier docs wrongly called 6543 the session
+// pooler port; 5432 is the session pooler.)
 // Never put the Supabase service-role key here; this connection uses
 // the postgres password only, and every query is still scoped by
 // owner_id in the actions.
@@ -42,8 +43,16 @@ const client = url
       // pooled session can also serve a stale prepared statement from
       // an earlier serverless invocation. Disabling them makes every
       // query work identically on the session pooler (5432), the
-      // transaction pooler (6543) and a plain local Postgres;
-      // postgres-js still escapes every parameter.
+      // transaction pooler (6543), a direct db.<ref>.supabase.co
+      // connection (5432) and a plain local Postgres; postgres-js
+      // still escapes every parameter.
+      // postgres-js must stay >= 3.4.9: in 3.4.5 its reconnect used
+      // setTimeout(connect, closedDate + delay - performance.now())
+      // with no clamp, so a connection that had died while idle
+      // (idle_timeout / pooler kill) and was only reused seconds
+      // later scheduled a NEGATIVE timeout — Node logged
+      // "Timeout duration was set to -26824…" on every live check.
+      // 3.4.9 clamps it with Math.max(0, …). Do not downgrade.
       prepare: false,
       connect_timeout: 10,
       idle_timeout: 20,
@@ -162,7 +171,14 @@ export type DbDiagnosis = {
  *  table exist? Used by getSupabaseAuthStatus so the signed-out
  *  "What's connected" strip stops claiming the workspace database is
  *  Live when it never answered a query. Returns only booleans and a
- *  Postgres error code — no SQL, no credentials. */
+ *  Postgres error code — no SQL, no credentials.
+ *
+ *  The failure is ALSO written to the server log (Vercel Runtime
+ *  Logs) with its code and a sanitised message — never the
+ *  connection string or password. The probe used to swallow the
+ *  error silently, so a failing live check left no trace anywhere:
+ *  no Postgres error in the logs, HTTP 200, databaseLive:false, and
+ *  nobody could tell a wrong password from an unreachable host. */
 export async function checkDatabase(): Promise<DbDiagnosis> {
   if (!client)
     return { reachable: false, tablesReady: false, code: "NO_DATABASE_URL" };
@@ -179,6 +195,21 @@ export async function checkDatabase(): Promise<DbDiagnosis> {
       code: null,
     };
   } catch (e) {
-    return { reachable: false, tablesReady: false, code: dbErrorCode(e) };
+    const code = dbErrorCode(e);
+    // Log the cause server-side only. The message is sanitised:
+    // a Drizzle failure message contains the full SQL + params, so
+    // only the code and the first line of a non-SQL message are
+    // kept, and anything resembling a connection string is dropped.
+    const raw = e instanceof Error ? e.message : String(e ?? "");
+    const firstLine = raw.split("\n")[0] ?? "";
+    const safeDetail = /Failed query|params:|postgres(?:ql)?:\/\/|select\s+["\w]+\s+from|insert\s+into|update\s+["\w]+\s+set/i.test(
+      firstLine,
+    )
+      ? "(SQL omitted)"
+      : firstLine.slice(0, 200);
+    console.error(
+      `[cashflow-genius] checkDatabase failed: code=${code ?? "unknown"} ${safeDetail}`,
+    );
+    return { reachable: false, tablesReady: false, code };
   }
 }
