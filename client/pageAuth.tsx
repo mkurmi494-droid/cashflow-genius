@@ -396,11 +396,17 @@ function OrDivider({ label }: { label: string }) {
 // Honest connection summary, visible before sign-in. The Supabase /
 // Google / Email rows come from a REAL server-side probe of the
 // connected Supabase project (getSupabaseAuthStatus asks Supabase Auth
-// for its own settings): each is only shown Live when Supabase itself
-// reports that provider enabled, and while the check is still running
-// the rows say “Checking…”, never Live. Gemini has no connection
-// wired, so it stays Not connected. After sign-in, Settings → Live
-// connections re-checks every service in real time.
+// for its own settings), and the Workspace database row comes from a
+// REAL database probe in the same call (connect + auth_users table
+// present): each is only shown Live when its own check actually
+// answers, and while the check is still running the rows say
+// “Checking…”, never Live. The database row used to be hardcoded
+// Live — which is how the strip claimed Live while every database
+// query was failing. Gemini is Live only when a Gemini key is
+// configured on the server; otherwise it stays Not connected and the
+// AI CFO answers with the built-in rule-based fallback. After
+// sign-in, Settings → Live connections re-checks every service in
+// real time.
 function ConnectionStrip() {
   const sb = useQuery({
     queryKey: ["cg-supabase-status"],
@@ -412,9 +418,32 @@ function ConnectionStrip() {
   const sbLive = sb.data?.reachable === true;
   const googleLive = sb.data?.googleEnabled === true;
   const emailLive = sb.data?.emailEnabled === true;
+  const dbLive = sb.data?.databaseLive === true;
+  const dbTablesReady = sb.data?.databaseTablesReady === true;
+  const aiLive = sb.data?.aiConfigured === true;
   const rows: { name: string; state: "live" | "off" | "checking"; note: string }[] = [
-    { name: "Workspace database", state: "live", note: "Your records live here" },
-    { name: "AI CFO engine", state: "live", note: "Runtime AI, grounded in your figures" },
+    {
+      name: "Workspace database",
+      state: checking ? "checking" : dbLive ? "live" : "off",
+      note: checking
+        ? "Checking the database…"
+        : dbLive
+          ? dbTablesReady
+            ? "Your records live here — database answered just now"
+            : "Database answered, but its tables aren't set up yet"
+          : sb.data?.databaseErrorCode === "28P01"
+            ? "Database didn't answer — its sign-in (DATABASE_URL password) looks wrong"
+            : "Database didn't answer the live check just now — sign-in can't work until it does",
+    },
+    {
+      name: "AI CFO engine",
+      state: checking ? "checking" : aiLive ? "live" : "off",
+      note: checking
+        ? "Checking…"
+        : aiLive
+          ? "Gemini connected — AI answers grounded in your figures"
+          : "No Gemini key — the AI CFO answers with the built-in rule-based fallback",
+    },
     {
       name: "Supabase",
       state: checking ? "checking" : sbLive ? "live" : "off",

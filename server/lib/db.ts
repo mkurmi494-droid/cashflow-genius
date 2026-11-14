@@ -1,10 +1,16 @@
 // Supabase Postgres connection (Drizzle, postgres-js driver).
 // DATABASE_URL must be the Supabase Postgres connection string — use the
 // Session Pooler URL from the Supabase dashboard (Project Settings →
-// Database → Connection string, port 6543, with ?sslmode=require) so
-// Vercel's serverless functions can connect. Never put the Supabase
-// service-role key here; this connection uses the postgres password
-// only, and every query is still scoped by owner_id in the actions.
+// Database → Connection string, Session pooler port 5432, with
+// ?sslmode=require) so Vercel's serverless functions can connect.
+// (The Transaction pooler is port 6543; either pooler works here
+// because prepared statements are disabled below — Supavisor's
+// transaction mode does not support them, and a pooled session can
+// also serve a stale prepared statement. The earlier docs wrongly
+// called 6543 the session pooler port; 5432 is the session pooler.)
+// Never put the Supabase service-role key here; this connection uses
+// the postgres password only, and every query is still scoped by
+// owner_id in the actions.
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../schema";
@@ -26,7 +32,24 @@ const needsSsl = url
   ? url.includes("sslmode=require") ||
     (!url.includes("localhost") && !url.includes("127.0.0.1"))
   : false;
-const client = url ? postgres(url, { ssl: needsSsl, max: 1 }) : null;
+const client = url
+  ? postgres(url, {
+      ssl: needsSsl,
+      max: 1,
+      // Supabase's poolers (Supavisor) do not reliably support the
+      // extended-protocol prepared statements postgres-js sends by
+      // default: the transaction pooler rejects them outright, and a
+      // pooled session can also serve a stale prepared statement from
+      // an earlier serverless invocation. Disabling them makes every
+      // query work identically on the session pooler (5432), the
+      // transaction pooler (6543) and a plain local Postgres;
+      // postgres-js still escapes every parameter.
+      prepare: false,
+      connect_timeout: 10,
+      idle_timeout: 20,
+      max_lifetime: 60 * 30,
+    })
+  : null;
 
 export const db = client
   ? drizzle(client, { schema })
@@ -35,8 +58,127 @@ export const db = client
       {
         get() {
           throw new Error(
-            "DATABASE_URL is not set. Add the Supabase Postgres connection string (Session Pooler, port 6543) in Vercel → Settings → Environment Variables as DATABASE_URL, then redeploy.",
+            "DATABASE_URL is not set. Add the Supabase Postgres connection string (Session Pooler, port 5432) in Vercel → Settings → Environment Variables as DATABASE_URL, then redeploy.",
           );
         },
       },
     ) as ReturnType<typeof drizzle>);
+
+// ---------- database error diagnosis (never leaks SQL) ----------
+// Drizzle wraps a failed query as `Failed query: <full SQL>\nparams:
+// <values>` and hides the real Postgres error in `.cause` — so when
+// the API route used to return the error's message verbatim, the user
+// saw raw SQL in a red box and nobody could tell WHY the query failed
+// (wrong password, missing tables, unreachable host all look the
+// same). These helpers unwrap the cause to its Postgres error code
+// and turn it into a plain-language message. Raw SQL, parameters,
+// connection strings and passwords are never returned to the client;
+// the full error is only ever written to the server log (see the API
+// route's catch block).
+
+/** Postgres / network error code, unwrapped through Drizzle's cause chain. */
+export function dbErrorCode(e: unknown): string | null {
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur; i++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === "string" && code) return code;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/** True when this error came from the database driver (Drizzle query
+ *  failure or a postgres / network error), as opposed to an app-level
+ *  error the actions already worded in plain language. */
+export function isDatabaseError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : "";
+  if (msg.startsWith("Failed query:")) return true;
+  return dbErrorCode(e) !== null;
+}
+
+/** Plain-language message for a database failure. Safe to show to the
+ *  user: it never contains SQL, parameters, connection strings or
+ *  passwords. */
+export function dbErrorMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (!url || /DATABASE_URL is not set/.test(msg))
+    return "The database connection isn't set up on the server yet (DATABASE_URL is missing). Please add the Supabase Postgres connection string in Vercel → Settings → Environment Variables as DATABASE_URL, then redeploy.";
+  const code = dbErrorCode(e);
+  switch (code) {
+    case "28P01":
+    case "28000":
+    case "28P02":
+      // Wrong password (or wrong user) for the Postgres connection.
+      // This is the most common cause when the migration ran fine
+      // (the SQL Editor uses dashboard auth, not this password) and
+      // the Auth REST probe answers (publishable key, no password)
+      // while every database query fails.
+      return "The app couldn't sign in to the database — the database password in the server settings (DATABASE_URL) doesn't match this Supabase project. Please check the password in Vercel → Settings → Environment Variables and redeploy.";
+    case "42P01":
+      return "The database tables haven't been created yet — the setup migration needs to be run in the Supabase SQL Editor first.";
+    case "3D000":
+      return "The database named in the server settings doesn't exist. Please check DATABASE_URL in Vercel → Settings → Environment Variables.";
+    case "42501":
+      return "The database user doesn't have permission to read the app's tables. Please check the database user in DATABASE_URL.";
+    default:
+      break;
+  }
+  if (
+    (code && /^E[A-Z_]+$/.test(code)) ||
+    /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|EAI_AGAIN|EPIPE/.test(
+      msg,
+    )
+  )
+    return "The app couldn't reach the database server just now. Please check your connection and try again in a moment.";
+  if (/timeout/i.test(msg))
+    return "The database took too long to answer. Please try again in a moment.";
+  return "Something went wrong while talking to the database. Please try again in a moment.";
+}
+
+/** Safe error message for ANY handler error: database failures get
+ *  the plain-language mapping above; app-level errors (already
+ *  worded in plain language by the actions) pass through unchanged.
+ *  As a last defence, anything that still looks like SQL or a
+ *  connection string is replaced with the generic message. */
+export function safeErrorMessage(e: unknown): string {
+  if (isDatabaseError(e)) return dbErrorMessage(e);
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  if (
+    /Failed query|params:|postgres(?:ql)?:\/\/|select\s+["\w]+\s+from|insert\s+into|update\s+["\w]+\s+set/i.test(
+      msg,
+    )
+  )
+    return "Something went wrong while talking to the database. Please try again in a moment.";
+  return msg || "Something went wrong. Please try again.";
+}
+
+export type DbDiagnosis = {
+  reachable: boolean;
+  tablesReady: boolean;
+  code: string | null;
+};
+
+/** Real database probe: can we connect, and does the auth_users
+ *  table exist? Used by getSupabaseAuthStatus so the signed-out
+ *  "What's connected" strip stops claiming the workspace database is
+ *  Live when it never answered a query. Returns only booleans and a
+ *  Postgres error code — no SQL, no credentials. */
+export async function checkDatabase(): Promise<DbDiagnosis> {
+  if (!client)
+    return { reachable: false, tablesReady: false, code: "NO_DATABASE_URL" };
+  try {
+    await client`select 1`;
+    const rows = await client<{ exists: boolean }[]>`
+      select exists (
+        select 1 from information_schema.tables
+        where table_schema = 'public' and table_name = 'auth_users'
+      ) as exists`;
+    return {
+      reachable: true,
+      tablesReady: rows[0]?.exists === true,
+      code: null,
+    };
+  } catch (e) {
+    return { reachable: false, tablesReady: false, code: dbErrorCode(e) };
+  }
+}

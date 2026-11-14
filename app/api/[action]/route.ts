@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Actions } from "@/server/actions";
+import { safeErrorMessage } from "@/server/lib/db";
 
 // One route serves every ported server action: POST /api/<action-name>
 // with the action's request JSON. The action's zod request schema is
@@ -65,11 +66,22 @@ export async function POST(
     }
     return NextResponse.json(checked.data);
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    // The full error stays on the server (Vercel logs) so the real
+    // cause can be diagnosed there; the client only ever gets a
+    // plain-language message. This matters because Drizzle wraps a
+    // failed query as "Failed query: <full SQL> params: <values>" —
+    // returning e.message verbatim used to show the user raw SQL in a
+    // red box while hiding the actual cause (wrong DB password,
+    // missing tables, unreachable host all looked identical).
+    console.error(`[cashflow-genius] ${action} failed:`, e);
+    const rawMessage = e instanceof Error ? e.message : String(e);
+    // 401 only for genuine auth failures ("please log in", "verify your
+    // account", expired/invalid session). The word "session" alone must NOT
+    // trigger it — the DATABASE_URL guidance mentions "Session Pooler".
     const status =
-      /log in|verify your account|session/i.test(message) ? 401 : 400;
+      /please log in|log in first|verify your account|session expired|invalid session|not signed in/i.test(rawMessage) ? 401 : 400;
     // Actions that never need a session keep their own error shape.
     void NO_TOKEN_ACTIONS;
-    return NextResponse.json({ error: message }, { status });
+    return NextResponse.json({ error: safeErrorMessage(e) }, { status });
   }
 }

@@ -12,7 +12,7 @@
 import { defineAction, z, type ActionsModule } from "./lib/actions";
 import { and, asc, desc, eq } from "drizzle-orm";
 import * as schema from "./schema";
-import { db } from "./lib/db";
+import { db, checkDatabase } from "./lib/db";
 import { aiComplete, getUserGeminiKey } from "./lib/ai";
 
 type Db = typeof db;
@@ -4702,7 +4702,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   getSupabaseAuthStatus: defineAction({
     description:
-      "Public live check of the connected Supabase project (no sign-in needed): asks Supabase Auth for its own settings and reports whether the project answered and whether its Google and Email providers are enabled. Used by the signed-out screens' “What's connected” strip so Google sign-in and email OTP verification are only ever shown as connected after this real check succeeds.",
+      "Public live check of the connected Supabase project (no sign-in needed): asks Supabase Auth for its own settings and reports whether the project answered and whether its Google and Email providers are enabled. It ALSO runs a real database probe (connect + auth_users table present) — the signed-out “What's connected” strip only shows the workspace database as Live when this probe actually answers, because the Auth REST check alone cannot prove the database works (it uses the publishable key, not DATABASE_URL, so it stayed Live while every database query failed). Used by the signed-out screens' “What's connected” strip so Google sign-in and email OTP verification are only ever shown as connected after this real check succeeds.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       configured: z.boolean(),
@@ -4710,15 +4710,42 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
       googleEnabled: z.boolean(),
       emailEnabled: z.boolean(),
       checkedAt: z.string(),
+      databaseLive: z.boolean(),
+      databaseTablesReady: z.boolean(),
+      databaseErrorCode: z.string().nullable(),
+      aiConfigured: z.boolean(),
     }),
     async handler() {
       const probe = await probeSupabase();
+      // Real database probe, bounded so a dead database can't hang
+      // the sign-in screen: 5s, then report unreachable. The probe
+      // returns only booleans + a Postgres error code (e.g. 28P01
+      // for a wrong database password) — never SQL or credentials.
+      const dbProbe = await Promise.race([
+        checkDatabase(),
+        new Promise<{ reachable: false; tablesReady: false; code: string }>(
+          (resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  reachable: false,
+                  tablesReady: false,
+                  code: "TIMEOUT",
+                }),
+              5000,
+            ),
+        ),
+      ]);
       return {
         configured: true,
         reachable: probe.reachable,
         googleEnabled: probe.googleEnabled,
         emailEnabled: probe.emailEnabled,
         checkedAt: new Date(probe.checkedAtMs).toISOString(),
+        databaseLive: dbProbe.reachable,
+        databaseTablesReady: dbProbe.tablesReady,
+        databaseErrorCode: dbProbe.code,
+        aiConfigured: !!process.env.GEMINI_API_KEY,
       };
     },
   }),

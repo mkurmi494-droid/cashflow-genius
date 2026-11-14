@@ -56,8 +56,12 @@ deploy (see “After deploy” below).
 
 ### 2. Get the Postgres connection string
 Supabase dashboard → **Project Settings → Database → Connection
-string** → choose **Session pooler** (port 6543). It looks like:
-`postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require`
+string** → choose **Session pooler** (port 5432). It looks like:
+`postgresql://postgres.<ref>:<DB_PASSWORD>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require`
+(The Transaction pooler is port 6543; either works with this app
+because prepared statements are disabled, but use the port that
+matches the pooler mode you picked — a Session-pooler string is on
+5432.)
 Use your database password (the one set when the project was created).
 This is the only secret the deploy needs — put it in Vercel env vars,
 never in the repo.
