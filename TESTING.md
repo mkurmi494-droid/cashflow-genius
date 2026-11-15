@@ -212,3 +212,68 @@ Two fixes found by testing and fixed in the port:
   empty DB -> tablesReady:false; DATABASE_URL unset ->
   code NO_DATABASE_URL. `npx tsc --noEmit` 0 errors, `npm run build`
   passes. NOT pushed, NOT deployed.
+
+## 2026-11-15 — demo rehearsal: stale lists + voice parser (NOT pushed, NOT deployed)
+
+Two demo-blocking bugs found in the live 3-minute rehearsal:
+
+### Bug A — stale lists STILL happen live, despite commit 1136806
+- Symptom on live: after saving a ₹500 expense / creating INV-2026-003 /
+  marking it paid / a Scam Shield check / a mode switch, the visible list
+  only changed after a full reload (which itself takes ~15–20s).
+- Root cause (proven with a QueryObserver harness against the production
+  build): the 1136806 invalidation mechanism itself works — a subscribed
+  observer refetches correctly, including for a mutation landing mid-fetch
+  (React Query 5 refetches after the in-flight fetch completes). The real
+  cause is LATENCY, not a missed invalidation: getState ran ~20 sequential
+  DB round-trips plus 3 unscoped full-table scans (invoice items, EMI
+  instalments, AI messages — every user's rows), so the post-mutation
+  refetch took as long as the initial load (~15–20s live), and with
+  `retry: false` a failed refetch silently kept the old data forever.
+- Fix (client): `client/api.ts` now carries each mutation's args + response
+  in the `cg:mutated` event; new `client/optimistic.ts` patches the cached
+  ["cg-state"] from them (save/delete transaction, save/set-status/mark-paid/
+  delete invoice, Scam Shield check, save note, mode switch — the last
+  clears the old workspace's lists so they are never shown under the new
+  mode's name); `client/App.tsx`'s listener patches first, then cancels
+  any in-flight getState (its snapshot predates the save) and invalidates
+  for server reconciliation. Lists now change in the same tick as the toast.
+- Fix (server): getState + getCombinedSummary run all independent reads in
+  one Promise.all; the 3 unscoped scans are now owner-scoped subqueries;
+  geminiKeyOf is called once instead of twice. Local getState stayed ~140ms
+  (localhost round-trips are ~free); the live gain comes from collapsing
+  ~20 cross-region sequential round-trips into one batch — verify on live.
+- Verification: harness `/tmp/cg-verify-v3.mjs` (observer + slow 1.5s
+  queryFn, production build, local Postgres 16): 23/23 — save/invoice/
+  mark-paid/Scam-check/mode-switch all visible IMMEDIATELY with no reload
+  and still correct after the reconciliation refetch; a mutation mid-fetch
+  reconciles in ~2.3s (one slow load, not two). Duplicate-invoice guard
+  (400, plain-language) and repeat mark-paid (alreadyPaid, exactly 1
+  linked income) still hold; getCombinedSummary 200, 4 workspaces.
+
+### Bug B — voice parser mangled "₹500 kharcha, chai"
+- Symptom: typed into the Voice tab it parsed as amount ₹500,000 with
+  description "harcha, chai".
+- Root cause (client/parseEntry.ts): the `k` unit suffix in
+  extractAmountRupees matched the "k" at the start of the NEXT word
+  ("kharcha") — no word boundary after the unit — so ₹500 became 500k;
+  the description-strip regex did the same and ate the "k" off "kharcha".
+- Fix: `\b` after the unit group in both the amount regexes and the
+  description-strip regex. Regression test: scripts/voice-parse-test.mjs
+  (transpiles the real parser, no mocks): 19/19, including "₹500 kharcha,
+  chai" → 500 / "kharcha, chai", "500 kharcha chai" → 500, "₹1,000 petrol"
+  → 1000, "chai 250" → 250, and the multiplier still working ("2.5k" →
+  2500, "₹500k" → 500000, "500 k" → 500000).
+
+### Scam Shield 0/100 on a classic fake-payment message — genuine miss, fixed
+- "UPI payment of Rs 5,000 received from 98765 43210. Check balance now."
+  scored 0/100 because payment_claim required the verb adjacent to
+  "payment" ("payment received"), and the amount sat in between.
+- Fix (server/actions.ts analyseScamText): payment_claim now allows an
+  amount/words between "payment"/"amount" and the verb (max 50 chars,
+  stops at a sentence end); new medium reason `unverified_sender_phone`
+  when a payment claim's only sender is a bare 10-digit mobile with no
+  UPI ID or reference. The message now scores 30/100 "suspicious" with
+  both reasons. The sample scam message still scores 100/100 high_risk,
+  and a genuine bank credit SMS ("Rs 5,000 credited to your A/c…") still
+  scores 0 — no false positive.

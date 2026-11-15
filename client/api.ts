@@ -104,6 +104,16 @@ export async function withTimeout<T>(
 // "cg:mutated" event, and App.tsx listens for it and invalidates
 // the state queries. Reads are excluded so a refetch can never
 // re-trigger itself (getState → event → refetch → …).
+//
+// That alone was NOT enough (2026-11-15): the refetch re-runs the
+// whole getState ledger, which takes ~15–20s on a live cold start,
+// so every save looked stale until a reload — and a refetch that
+// fails (retry: false) silently leaves the old data in place. So
+// the event also carries the mutation's arguments and response, and
+// App patches the cached ["cg-state"] data optimistically from
+// them (see client/optimistic.ts): the list the user is looking at
+// changes in the same tick as the toast, and the refetch that
+// follows only reconciles it with the server.
 const READ_ONLY_ACTIONS = new Set([
   "getState",
   "getCombinedSummary",
@@ -116,12 +126,21 @@ const READ_ONLY_ACTIONS = new Set([
   "resendEmailOtp",
 ]);
 
-function notifyMutation(name: string): void {
+function notifyMutation(
+  name: string,
+  args: Record<string, unknown>,
+  data: unknown,
+): void {
   if (READ_ONLY_ACTIONS.has(name)) return;
   try {
     if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      // The detail carries the mutation's arguments and response (minus
+      // the session token) so App can patch the cached ledger
+      // optimistically — the list updates in the same tick as the toast
+      // instead of waiting on a full getState refetch.
+      const { token: _token, ...safeArgs } = args;
       window.dispatchEvent(
-        new CustomEvent("cg:mutated", { detail: { action: name } }),
+        new CustomEvent("cg:mutated", { detail: { action: name, args: safeArgs, data } }),
       );
     }
   } catch {
@@ -147,7 +166,7 @@ async function callAction(
   }
   // Only a successful mutation refreshes the views: a failed save
   // must not pretend the (unchanged) data is new.
-  notifyMutation(name);
+  notifyMutation(name, args, data);
   return data;
 }
 

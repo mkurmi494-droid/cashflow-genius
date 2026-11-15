@@ -10,7 +10,7 @@
 // otherwise.
 
 import { defineAction, z, type ActionsModule } from "./lib/actions";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import * as schema from "./schema";
 import { db, checkDatabase, dbErrorCode } from "./lib/db";
 import { aiComplete, getUserGeminiKey } from "./lib/ai";
@@ -1530,98 +1530,158 @@ export const Actions = {
       const user = await requireUser(db, args.token);
       const wsMode = await activeMode(db, user.id);
       const business = await ensureWorkspace(db, user.id, wsMode);
-      const workspaceRows = await db
-        .select()
-        .from(schema.businesses)
-        .where(eq(schema.businesses.ownerId, user.id));
-      const txns = await db
-        .select()
-        .from(schema.transactions)
-        .where(and(eq(schema.transactions.ownerId, user.id), eq(schema.transactions.mode, wsMode)))
-        .orderBy(desc(schema.transactions.date), desc(schema.transactions.createdAt));
-      const invs = await db
-        .select()
-        .from(schema.invoices)
-        .where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode)))
-        .orderBy(desc(schema.invoices.createdAt));
-      const items = await db.select().from(schema.invoiceItems);
+      // All reads below are independent once the user, active mode and
+      // workspace exist, so they run in ONE Promise.all instead of ~20
+      // sequential round-trips. Sequentially this made getState take
+      // ~15–20s on a live cold start (Vercel → Supabase pooler), so
+      // every post-mutation refetch looked stale until a reload.
+      // The three previously unscoped full-table scans (invoice items,
+      // EMI instalments, AI messages — every user's rows, loaded into
+      // memory) are now scoped to this owner's records via subqueries.
+      const [
+        workspaceRows,
+        txns,
+        invs,
+        items,
+        notesRows,
+        scen,
+        rec,
+        emiPlanRows,
+        emiInstRows,
+        savingsGoalRows,
+        savingsTransferRows,
+        scamRows,
+        buds,
+        customCats,
+        convs,
+        msgs,
+        acts,
+        cursorStyle,
+        geminiKey,
+      ] = await Promise.all([
+        db.select().from(schema.businesses).where(eq(schema.businesses.ownerId, user.id)),
+        db
+          .select()
+          .from(schema.transactions)
+          .where(and(eq(schema.transactions.ownerId, user.id), eq(schema.transactions.mode, wsMode)))
+          .orderBy(desc(schema.transactions.date), desc(schema.transactions.createdAt)),
+        db
+          .select()
+          .from(schema.invoices)
+          .where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode)))
+          .orderBy(desc(schema.invoices.createdAt)),
+        db
+          .select()
+          .from(schema.invoiceItems)
+          .where(
+            inArray(
+              schema.invoiceItems.invoiceId,
+              db
+                .select({ id: schema.invoices.id })
+                .from(schema.invoices)
+                .where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode))),
+            ),
+          ),
+        db
+          .select()
+          .from(schema.notes)
+          .where(and(eq(schema.notes.ownerId, user.id), eq(schema.notes.mode, wsMode)))
+          .orderBy(desc(schema.notes.pinned), desc(schema.notes.updatedAt)),
+        db
+          .select()
+          .from(schema.scenarios)
+          .where(and(eq(schema.scenarios.ownerId, user.id), eq(schema.scenarios.mode, wsMode)))
+          .orderBy(desc(schema.scenarios.updatedAt)),
+        db.select().from(schema.recurringCashflows).where(and(eq(schema.recurringCashflows.ownerId, user.id), eq(schema.recurringCashflows.mode, wsMode))),
+        db
+          .select()
+          .from(schema.emiPlans)
+          .where(and(eq(schema.emiPlans.ownerId, user.id), eq(schema.emiPlans.mode, wsMode)))
+          .orderBy(desc(schema.emiPlans.createdAt)),
+        db
+          .select()
+          .from(schema.emiInstalments)
+          .where(
+            inArray(
+              schema.emiInstalments.planId,
+              db
+                .select({ id: schema.emiPlans.id })
+                .from(schema.emiPlans)
+                .where(and(eq(schema.emiPlans.ownerId, user.id), eq(schema.emiPlans.mode, wsMode))),
+            ),
+          ),
+        db
+          .select()
+          .from(schema.savingsGoals)
+          .where(and(eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)))
+          .orderBy(desc(schema.savingsGoals.createdAt)),
+        db
+          .select()
+          .from(schema.savingsTransfers)
+          .where(and(eq(schema.savingsTransfers.ownerId, user.id), eq(schema.savingsTransfers.mode, wsMode))),
+        db
+          .select()
+          .from(schema.scamChecks)
+          .where(and(eq(schema.scamChecks.ownerId, user.id), eq(schema.scamChecks.mode, wsMode)))
+          .orderBy(desc(schema.scamChecks.createdAt))
+          .limit(10),
+        db.select().from(schema.budgets).where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode))),
+        db
+          .select()
+          .from(schema.customCategories)
+          .where(and(eq(schema.customCategories.ownerId, user.id), eq(schema.customCategories.mode, wsMode)))
+          .orderBy(asc(schema.customCategories.name)),
+        db
+          .select()
+          .from(schema.aiConversations)
+          .where(and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode)))
+          .orderBy(desc(schema.aiConversations.createdAt)),
+        db
+          .select()
+          .from(schema.aiMessages)
+          .where(
+            inArray(
+              schema.aiMessages.conversationId,
+              db
+                .select({ id: schema.aiConversations.id })
+                .from(schema.aiConversations)
+                .where(and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode))),
+            ),
+          )
+          .orderBy(asc(schema.aiMessages.createdAt)),
+        db
+          .select()
+          .from(schema.activityLogs)
+          .where(and(eq(schema.activityLogs.ownerId, user.id), eq(schema.activityLogs.mode, wsMode)))
+          .orderBy(desc(schema.activityLogs.id))
+          .limit(25),
+        cursorStyleOf(db, user.id),
+        geminiKeyOf(db, user.id),
+      ]);
       const itemsByInv = new Map<string, ItemRow[]>();
       for (const it of items) {
         const arr = itemsByInv.get(it.invoiceId) ?? [];
         arr.push(it);
         itemsByInv.set(it.invoiceId, arr);
       }
-      const notesRows = await db
-        .select()
-        .from(schema.notes)
-        .where(and(eq(schema.notes.ownerId, user.id), eq(schema.notes.mode, wsMode)))
-        .orderBy(desc(schema.notes.pinned), desc(schema.notes.updatedAt));
-      const scen = await db
-        .select()
-        .from(schema.scenarios)
-        .where(and(eq(schema.scenarios.ownerId, user.id), eq(schema.scenarios.mode, wsMode)))
-        .orderBy(desc(schema.scenarios.updatedAt));
-      const rec = await db.select().from(schema.recurringCashflows).where(and(eq(schema.recurringCashflows.ownerId, user.id), eq(schema.recurringCashflows.mode, wsMode)));
-      const emiPlanRows = await db
-        .select()
-        .from(schema.emiPlans)
-        .where(and(eq(schema.emiPlans.ownerId, user.id), eq(schema.emiPlans.mode, wsMode)))
-        .orderBy(desc(schema.emiPlans.createdAt));
-      const emiInstRows = await db.select().from(schema.emiInstalments);
       const instByPlan = new Map<string, EmiInstRow[]>();
       for (const inst of emiInstRows) {
         const arr = instByPlan.get(inst.planId) ?? [];
         arr.push(inst);
         instByPlan.set(inst.planId, arr);
       }
-      const savingsGoalRows = await db
-        .select()
-        .from(schema.savingsGoals)
-        .where(and(eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)))
-        .orderBy(desc(schema.savingsGoals.createdAt));
-      const savingsTransferRows = await db
-        .select()
-        .from(schema.savingsTransfers)
-        .where(and(eq(schema.savingsTransfers.ownerId, user.id), eq(schema.savingsTransfers.mode, wsMode)));
       const transfersByGoal = new Map<string, SavingsTransferRow[]>();
       for (const tr of savingsTransferRows) {
         const arr = transfersByGoal.get(tr.goalId) ?? [];
         arr.push(tr);
         transfersByGoal.set(tr.goalId, arr);
       }
-      const scamRows = await db
-        .select()
-        .from(schema.scamChecks)
-        .where(and(eq(schema.scamChecks.ownerId, user.id), eq(schema.scamChecks.mode, wsMode)))
-        .orderBy(desc(schema.scamChecks.createdAt))
-        .limit(10);
-      const buds = await db.select().from(schema.budgets).where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode)));
-      const customCats = await db
-        .select()
-        .from(schema.customCategories)
-        .where(and(eq(schema.customCategories.ownerId, user.id), eq(schema.customCategories.mode, wsMode)))
-        .orderBy(asc(schema.customCategories.name));
-      const convs = await db
-        .select()
-        .from(schema.aiConversations)
-        .where(and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode)))
-        .orderBy(desc(schema.aiConversations.createdAt));
-      const msgs = await db
-        .select()
-        .from(schema.aiMessages)
-        .orderBy(asc(schema.aiMessages.createdAt));
-      const acts = await db
-        .select()
-        .from(schema.activityLogs)
-        .where(and(eq(schema.activityLogs.ownerId, user.id), eq(schema.activityLogs.mode, wsMode)))
-        .orderBy(desc(schema.activityLogs.id))
-        .limit(25);
       return {
         business: bizOut(business),
         activeMode: wsMode,
-        cursorStyle: await cursorStyleOf(db, user.id),
-        geminiKeySaved: (await geminiKeyOf(db, user.id)).saved,
-        geminiKeyLast4: (await geminiKeyOf(db, user.id)).last4,
+        cursorStyle,
+        geminiKeySaved: geminiKey.saved,
+        geminiKeyLast4: geminiKey.last4,
         workspaces: workspaceRows.map((w) => ({
           mode: w.mode,
           name: w.name,
@@ -1979,52 +2039,60 @@ export const Actions = {
         d.setUTCDate(d.getUTCDate() + 30);
         return d.toISOString().slice(0, 10);
       })();
-      const bizRows = await db
-        .select()
-        .from(schema.businesses)
-        .where(eq(schema.businesses.ownerId, user.id));
-      const allTxns = await db
-        .select()
-        .from(schema.transactions)
-        .where(eq(schema.transactions.ownerId, user.id));
-      const allInvs = await db
-        .select()
-        .from(schema.invoices)
-        .where(eq(schema.invoices.ownerId, user.id));
-      const allItems = await db.select().from(schema.invoiceItems);
+      // Same as getState (2026-11-15): independent reads run in one
+      // Promise.all, and the two unscoped full-table scans are scoped
+      // to this owner's invoices / EMI plans via subqueries.
+      const [
+        bizRows,
+        allTxns,
+        allInvs,
+        allItems,
+        allRec,
+        allBuds,
+        allPlans,
+        allInst,
+        allSavingsGoals,
+        allSavingsTransfers,
+      ] = await Promise.all([
+        db.select().from(schema.businesses).where(eq(schema.businesses.ownerId, user.id)),
+        db.select().from(schema.transactions).where(eq(schema.transactions.ownerId, user.id)),
+        db.select().from(schema.invoices).where(eq(schema.invoices.ownerId, user.id)),
+        db
+          .select()
+          .from(schema.invoiceItems)
+          .where(
+            inArray(
+              schema.invoiceItems.invoiceId,
+              db.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.ownerId, user.id)),
+            ),
+          ),
+        db.select().from(schema.recurringCashflows).where(eq(schema.recurringCashflows.ownerId, user.id)),
+        db.select().from(schema.budgets).where(eq(schema.budgets.ownerId, user.id)),
+        db.select().from(schema.emiPlans).where(eq(schema.emiPlans.ownerId, user.id)),
+        db
+          .select()
+          .from(schema.emiInstalments)
+          .where(
+            inArray(
+              schema.emiInstalments.planId,
+              db.select({ id: schema.emiPlans.id }).from(schema.emiPlans).where(eq(schema.emiPlans.ownerId, user.id)),
+            ),
+          ),
+        db.select().from(schema.savingsGoals).where(eq(schema.savingsGoals.ownerId, user.id)),
+        db.select().from(schema.savingsTransfers).where(eq(schema.savingsTransfers.ownerId, user.id)),
+      ]);
       const itemsByInv = new Map<string, ItemRow[]>();
       for (const it of allItems) {
         const arr = itemsByInv.get(it.invoiceId) ?? [];
         arr.push(it);
         itemsByInv.set(it.invoiceId, arr);
       }
-      const allRec = await db
-        .select()
-        .from(schema.recurringCashflows)
-        .where(eq(schema.recurringCashflows.ownerId, user.id));
-      const allBuds = await db
-        .select()
-        .from(schema.budgets)
-        .where(eq(schema.budgets.ownerId, user.id));
-      const allPlans = await db
-        .select()
-        .from(schema.emiPlans)
-        .where(eq(schema.emiPlans.ownerId, user.id));
-      const allInst = await db.select().from(schema.emiInstalments);
       const instByPlan = new Map<string, EmiInstRow[]>();
       for (const inst of allInst) {
         const arr = instByPlan.get(inst.planId) ?? [];
         arr.push(inst);
         instByPlan.set(inst.planId, arr);
       }
-      const allSavingsGoals = await db
-        .select()
-        .from(schema.savingsGoals)
-        .where(eq(schema.savingsGoals.ownerId, user.id));
-      const allSavingsTransfers = await db
-        .select()
-        .from(schema.savingsTransfers)
-        .where(eq(schema.savingsTransfers.ownerId, user.id));
       const activeBiz = bizRows.find((b) => asMode(b.mode) === current) ?? bizRows[0];
       const workspaces = APP_MODES.map((mode) => {
         const biz = bizRows.find((b) => asMode(b.mode) === mode);
@@ -3591,11 +3659,30 @@ export const Actions = {
             severity: shortener || lookalike || ipLink ? "high" : "medium",
           });
         }
-        if (/(payment (successful|received|done|sent)|amount (credited|received)|i have (paid|sent)|paid successfully|money (sent|transferred))/.test(lower)) {
+        // A payment claim need not have the verb next to "payment":
+        // "payment of Rs 5,000 received" is the classic fake-payment
+        // wording, and the old adjacent-only pattern missed it entirely
+        // (0/100). The [^.;]{0,50}? span allows an amount in between,
+        // but stops at a sentence end so it can't reach across the text.
+        const paymentClaim =
+          /(payment[^.;]{0,50}?(successful|received|done|sent|credited)|amount[^.;]{0,50}?(credited|received)|i have (paid|sent)|paid successfully|money (sent|transferred))/.test(lower);
+        if (paymentClaim) {
           addReason({
             code: "payment_claim",
             title: "Claims a payment was made — a claim is not proof",
             detail: "Anyone can type 'payment successful' or forward a fake confirmation. A payment is real only when it appears in your own bank/UPI app history with a matching UTR/reference number.",
+            severity: "medium",
+          });
+        }
+        // A payment claim whose only "sender" is a bare 10-digit mobile
+        // number, with no UPI ID or UTR/reference anywhere: real
+        // bank/UPI notices come from a registered sender ID, never from
+        // a stranger's mobile number.
+        if (paymentClaim && upiIds.length === 0 && /\bfrom\s+\d{5}[\s-]?\d{5}\b/.test(lower)) {
+          addReason({
+            code: "unverified_sender_phone",
+            title: "Payment is claimed from a bare mobile number",
+            detail: "The message says the payment came from a 10-digit mobile number, with no UPI ID or reference number to check. Real payment notices come from your bank/UPI app under a registered sender — a stranger's number claiming to have paid you is a classic fake-payment pattern. Verify in your bank/UPI app before believing it.",
             severity: "medium",
           });
         }

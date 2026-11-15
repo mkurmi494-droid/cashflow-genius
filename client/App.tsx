@@ -28,6 +28,7 @@ import { ScamShieldPage } from "./pageShield";
 import { ReportsPage, ScannerPage, TaxPage } from "./pageInsights";
 import { SettingsPage, VaultPage } from "./pageVault";
 import { parseBankMessage, parseSpokenEntry, type EntryDraft } from "./parseEntry";
+import { patchStateAfterMutation, type MutationDetail } from "./optimistic";
 import { AppTour } from "./appTour";
 import { InstallButton } from "./pwa";
 
@@ -744,16 +745,35 @@ export function App() {
   // window refocus. Freshness after the user's own edits does NOT rely
   // on this expiring: every successful mutation dispatches a
   // "cg:mutated" event from the API client (see client/api.ts), and
-  // the listener below invalidates the state queries immediately, so
-  // a save shows up in the same session with no reload. (Before this,
-  // most page mutations only showed a toast and never invalidated,
-  // so saves looked like they did nothing until a reload — and a
-  // re-saved invoice then became a real duplicate.)
+  // the listener below handles it in three steps, in order:
+  //   1. Patch the cached ["cg-state"] optimistically from the
+  //      mutation's own arguments + response (client/optimistic.ts),
+  //      so the list on screen changes in the same tick as the toast.
+  //      (Invalidation alone was not enough: the refetch re-runs the
+  //      whole getState ledger, ~15–20s on a live cold start, so every
+  //      save looked stale until a reload.)
+  //   2. Cancel any getState fetch already in flight — it was started
+  //      before the mutation, so its snapshot predates the save and
+  //      would overwrite the patch when it lands; cancelling also
+  //      means the fresh fetch starts now instead of after the stale
+  //      one finishes.
+  //   3. Invalidate the state queries so the server reconciliation
+  //      refetch runs and corrects anything the patch got wrong.
   useEffect(() => {
-    const onMutated = () => {
-      void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
-      void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
-      void queryClient.invalidateQueries({ queryKey: ["note-versions"] });
+    const onMutated = (e: Event) => {
+      const detail = (e as CustomEvent<MutationDetail>).detail;
+      if (detail) {
+        queryClient.setQueryData(["cg-state"], (old: State | undefined) =>
+          patchStateAfterMutation(old, detail),
+        );
+      }
+      void (async () => {
+        await queryClient.cancelQueries({ queryKey: ["cg-state"] });
+        await queryClient.cancelQueries({ queryKey: ["cg-combined"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
+        void queryClient.invalidateQueries({ queryKey: ["note-versions"] });
+      })();
     };
     window.addEventListener("cg:mutated", onMutated);
     return () => window.removeEventListener("cg:mutated", onMutated);

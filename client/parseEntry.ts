@@ -33,11 +33,16 @@ function addDaysStr(base: string, delta: number): string {
 }
 
 /** First amount-looking number in the text: "₹1,500", "Rs. 500",
- *  "500 rupees", "500", "2.5k" (→ 2500). Returns rupees or null. */
+ *  "500 rupees", "500", "2.5k" (→ 2500). Returns rupees or null.
+ *
+ *  The unit suffix ("k", "thousand", "rupees"…) must be a standalone
+ *  token: the `\b` after it stops "₹500 kharcha" from reading the "k"
+ *  of "kharcha" as a thousands multiplier (₹500,000) — the same bug
+ *  also ate that "k" out of the description. */
 export function extractAmountRupees(text: string): number | null {
   const t = text.replace(/,/g, "");
-  const withCurrency = t.match(/(?:₹|rs\.?|inr)\s*(\d+(?:\.\d+)?)\s*(k|thousand|hazaar)?/i);
-  const plain = t.match(/(\d+(?:\.\d+)?)\s*(k|thousand|hazaar|rupees?|rupay|rs\b)/i);
+  const withCurrency = t.match(/(?:₹|rs\.?|inr)\s*(\d+(?:\.\d+)?)\s*(k|thousand|hazaar)?\b/i);
+  const plain = t.match(/(\d+(?:\.\d+)?)\s*(k|thousand|hazaar|rupees?|rupay|rs)\b/i);
   const bare = t.match(/\b(\d+(?:\.\d+)?)\b/);
   const m = withCurrency ?? plain ?? bare;
   if (!m) return null;
@@ -192,8 +197,10 @@ export function parseSpokenEntry(raw: string, mode: AppMode): EntryDraft {
   const category = pickCategory(text, mode, type) ?? "General";
   // Description: the spoken phrase itself, minus the amount chunk, so
   // the draft reads like what the user said — they can edit it freely.
+  // The `\b` after the unit stops "₹500 kharcha" from stripping the "k"
+  // of "kharcha" along with the amount (it used to leave "harcha").
   const description = original
-    .replace(/(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|hazaar|rupees?|rupay)?/i, "")
+    .replace(/(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|hazaar|rupees?|rupay)?\b/i, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120);
