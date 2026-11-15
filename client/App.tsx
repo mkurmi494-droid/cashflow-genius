@@ -29,6 +29,7 @@ import { ReportsPage, ScannerPage, TaxPage } from "./pageInsights";
 import { SettingsPage, VaultPage } from "./pageVault";
 import { parseBankMessage, parseSpokenEntry, type EntryDraft } from "./parseEntry";
 import { patchStateAfterMutation, type MutationDetail } from "./optimistic";
+import { MODE_SWITCH_TIMEOUT_MS, shouldShowModeSwitchLoading } from "./modeSwitch";
 import { AppTour } from "./appTour";
 import { InstallButton } from "./pwa";
 
@@ -759,10 +760,27 @@ export function App() {
   //      one finishes.
   //   3. Invalidate the state queries so the server reconciliation
   //      refetch runs and corrects anything the patch got wrong.
+  //
+  //   Mode switches get one more step (client/modeSwitch.ts): the
+  //   setMode patch clears the old workspace's lists, so until the
+  //   refetch lands the cached state holds EMPTY lists under the new
+  //   mode's name — and the pages would render their empty states
+  //   ("Your universe is empty") for a workspace that actually has
+  //   records. So the switch target is remembered here, and while it
+  //   is pending the app renders an honest "Loading …" skeleton
+  //   instead of the pages (see the render branch below). The gate
+  //   clears as soon as the refetch lands with the new mode's data.
+  const [switchingTo, setSwitchingTo] = useState<AppMode | null>(null);
   useEffect(() => {
     const onMutated = (e: Event) => {
       const detail = (e as CustomEvent<MutationDetail>).detail;
       if (detail) {
+        if (detail.action === "setMode") {
+          const m = detail.args.mode;
+          if (typeof m === "string" && (APP_MODES as readonly string[]).includes(m)) {
+            setSwitchingTo(m as AppMode);
+          }
+        }
         queryClient.setQueryData(["cg-state"], (old: State | undefined) =>
           patchStateAfterMutation(old, detail),
         );
@@ -995,6 +1013,25 @@ export function App() {
   };
 
   const state = stateQ.data;
+  // Mode-switch gate: clear the pending switch as soon as the
+  // refetch has landed with the new mode's data (or errored, so the
+  // error screen shows instead of the skeleton). A safety timeout
+  // clears it anyway if the refetch never settles.
+  useEffect(() => {
+    if (!switchingTo) return;
+    if (stateQ.isError) {
+      setSwitchingTo(null);
+      return;
+    }
+    if (state && modeOf(state) === switchingTo && !stateQ.isFetching) {
+      setSwitchingTo(null);
+    }
+  }, [switchingTo, state, stateQ.isFetching, stateQ.isError]);
+  useEffect(() => {
+    if (!switchingTo) return;
+    const t = setTimeout(() => setSwitchingTo(null), MODE_SWITCH_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [switchingTo]);
   // Cursor style: the account's saved choice (from getState) is the
   // source of truth. As soon as it loads — and whenever it changes in
   // Settings — it is applied across the whole app immediately, with no
@@ -1258,6 +1295,36 @@ export function App() {
           </div>
           <div className="skeleton h-64 w-full !rounded-3xl" />
           <p className="text-center text-sm font-semibold text-[var(--dim)]">Loading your ledger…</p>
+        </div>
+      </div>
+    );
+  }
+  // Mode-switch gate (client/modeSwitch.ts): while the new
+  // workspace's refetch is in flight, the cached state holds the
+  // deliberately cleared lists — render a loading skeleton, never
+  // the pages, so a workspace with records is never shown as empty.
+  // The empty states only render once a completed fetch actually
+  // returned zero records (the gate is already clear by then).
+  const showModeSwitchLoading = shouldShowModeSwitchLoading({
+    switchingTo,
+    activeMode: state ? modeOf(state) : null,
+    isFetching: stateQ.isFetching,
+    isError: stateQ.isError,
+  });
+  if (showModeSwitchLoading && switchingTo) {
+    return (
+      <div className="min-h-dvh bg-[var(--bg)] px-4 py-6" aria-busy="true" aria-label={`Loading ${MODE_LABELS[switchingTo]}`}>
+        <SafeAreaTopScrim backgroundColor="var(--bg)" />
+        <div className="mx-auto max-w-6xl space-y-4">
+          <div className="skeleton h-40 w-full !rounded-3xl" />
+          <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+            <div className="skeleton h-24" />
+            <div className="skeleton h-24" />
+            <div className="skeleton h-24 hidden xl:block" />
+            <div className="skeleton h-24 hidden xl:block" />
+          </div>
+          <div className="skeleton h-64 w-full !rounded-3xl" />
+          <p className="text-center text-sm font-semibold text-[var(--dim)]">Loading {MODE_LABELS[switchingTo]}…</p>
         </div>
       </div>
     );

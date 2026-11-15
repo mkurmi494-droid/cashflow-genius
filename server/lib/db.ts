@@ -5,8 +5,8 @@
 // ?sslmode=require) or the Direct connection URL
 // (db.<project-ref>.supabase.co:5432, no sslmode param): both work
 // here, because SSL is required for any non-localhost host (see
-// needsSsl below), prepared statements are disabled, and only one
-// connection is kept. (The Transaction pooler is port 6543; it
+// needsSsl below), prepared statements are disabled, and the pool is
+// capped at a few connections per serverless instance (see max below). (The Transaction pooler is port 6543; it
 // works too. The earlier docs wrongly called 6543 the session
 // pooler port; 5432 is the session pooler.)
 // Never put the Supabase service-role key here; this connection uses
@@ -45,7 +45,18 @@ const client = url
       // connection is still encrypted, and the password is never
       // sent in cleartext. Localhost keeps ssl off entirely.
       ssl: needsSsl ? { rejectUnauthorized: false } : false,
-      max: 1,
+      // Five connections, not one: getState/getCombinedSummary issue
+      // their ~19/10 reads in one Promise.all, but postgres-js runs
+      // every query on a single connection strictly one at a time —
+      // with max: 1 that "parallel" batch was really ~19 sequential
+      // cross-region round-trips, which is why the post-mode-switch
+      // refetch still took 15–30s live after the 1df9da0 fix that
+      // parallelised the queries (measured locally: 19 concurrent
+      // pg_sleep(50ms) took 985ms at max:1 vs 266ms at max:5). Five
+      // per serverless instance stays well inside what the Supabase
+      // session pooler (Supavisor) absorbs, and idle_timeout below
+      // still reaps connections an instance stops using.
+      max: 5,
       // Supabase's poolers (Supavisor) do not reliably support the
       // extended-protocol prepared statements postgres-js sends by
       // default: the transaction pooler rejects them outright, and a

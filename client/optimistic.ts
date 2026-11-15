@@ -304,8 +304,11 @@ export function patchStateAfterMutation(
       if (!["business", "personal", "creator", "student"].includes(mode)) return prev;
       // The other workspace's records are unknown until the refetch
       // lands — never show the old workspace's lists under the new
-      // mode's name. Empty lists render the empty states, then the
-      // refetch fills them (fast now that getState is parallel).
+      // mode's name. The cleared lists must NOT render as the empty
+      // states: App keeps a mode-switch loading skeleton on screen
+      // until the refetch lands (client/modeSwitch.ts), so the empty
+      // states only ever appear when a completed fetch actually
+      // returned zero records.
       return {
         ...prev,
         activeMode: mode as State["activeMode"],

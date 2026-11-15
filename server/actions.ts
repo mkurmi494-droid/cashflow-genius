@@ -109,17 +109,36 @@ function asCursorStyle(v: string | null | undefined): CursorStyleT {
     : "blue";
 }
 
-/** The account's saved cursor style, defaulting to "blue". Ensures the
- *  state row exists (via activeMode) so a later save always has a row
- *  to update. */
-async function cursorStyleOf(db: Db, ownerId: string): Promise<CursorStyleT> {
-  await activeMode(db, ownerId);
+/** The account's user_workspace_state row (active mode + cursor style
+ *  + saved Gemini key), creating it on first use. getState's prelude
+ *  already ensures the row exists via activeMode, so in the normal
+ *  path this is exactly one select. cursorStyleOf/geminiKeyOf used
+ *  to call activeMode() first and then select this same row again —
+ *  two sequential round-trips each, hidden inside getState's
+ *  "parallel" batch. */
+async function workspaceStateRow(db: Db, ownerId: string) {
   const rows = await db
     .select()
     .from(schema.userWorkspaceState)
     .where(eq(schema.userWorkspaceState.ownerId, ownerId))
     .limit(1);
-  return asCursorStyle(rows[0]?.cursorStyle);
+  if (rows[0]) return rows[0];
+  await db
+    .insert(schema.userWorkspaceState)
+    .values({ ownerId, activeMode: "business" })
+    .onConflictDoNothing();
+  const again = await db
+    .select()
+    .from(schema.userWorkspaceState)
+    .where(eq(schema.userWorkspaceState.ownerId, ownerId))
+    .limit(1);
+  return again[0] ?? null;
+}
+
+/** The account's saved cursor style, defaulting to "blue". */
+async function cursorStyleOf(db: Db, ownerId: string): Promise<CursorStyleT> {
+  const row = await workspaceStateRow(db, ownerId);
+  return asCursorStyle(row?.cursorStyle);
 }
 
 async function setCursorStyleRow(
@@ -180,13 +199,8 @@ async function geminiKeyOf(
   db: Db,
   ownerId: string,
 ): Promise<{ saved: boolean; last4: string }> {
-  await activeMode(db, ownerId);
-  const rows = await db
-    .select()
-    .from(schema.userWorkspaceState)
-    .where(eq(schema.userWorkspaceState.ownerId, ownerId))
-    .limit(1);
-  const key = rows[0]?.geminiApiKey ?? null;
+  const row = await workspaceStateRow(db, ownerId);
+  const key = row?.geminiApiKey ?? null;
   if (!key) return { saved: false, last4: "" };
   return { saved: true, last4: key.slice(-4) };
 }
@@ -271,16 +285,26 @@ async function ensureWorkspace(db: Db, ownerId: string, mode: AppModeT) {
   return refreshed[0]!;
 }
 
-async function log(db: Db, action: string, detail: string, ownerId = "legacy") {
+async function log(
+  db: Db,
+  action: string,
+  detail: string,
+  ownerId = "legacy",
+  mode?: string,
+) {
   // Activity entries belong to the workspace that was active when they
-  // happened, so each workspace keeps its own history.
-  let mode: string = "business";
-  try {
-    mode = await activeMode(db, ownerId);
-  } catch {
-    mode = "business";
+  // happened, so each workspace keeps its own history. Callers that
+  // already know the mode pass it, so this does not spend another
+  // round-trip re-reading it (setMode's handler already knows it).
+  let m: string = mode ?? "business";
+  if (!mode) {
+    try {
+      m = await activeMode(db, ownerId);
+    } catch {
+      m = "business";
+    }
   }
-  await db.insert(schema.activityLogs).values({ action, detail, ownerId, mode });
+  await db.insert(schema.activityLogs).values({ action, detail, ownerId, mode: m });
 }
 
 /** Throws a plain-language error when another invoice in this
@@ -849,19 +873,20 @@ async function currentUser(
   token: string | undefined,
 ): Promise<AuthUser | null> {
   if (!token) return null;
-  const sRows = await db
-    .select()
+  // One round-trip, not two: the session and its user used to be
+  // fetched in two sequential selects, which cost an extra
+  // cross-region round-trip on EVERY action call (getState's prelude
+  // included) — the same serialisation that made the live mode-switch
+  // refetch take 15–30s. The join returns exactly the same rows.
+  const rows = await db
+    .select({ session: schema.authSessions, user: schema.authUsers })
     .from(schema.authSessions)
+    .innerJoin(schema.authUsers, eq(schema.authSessions.userId, schema.authUsers.id))
     .where(eq(schema.authSessions.token, token))
     .limit(1);
-  const sess = sRows[0];
+  const sess = rows[0]?.session;
   if (!sess || sess.active !== 1 || sess.expiresAt < Date.now()) return null;
-  const uRows = await db
-    .select()
-    .from(schema.authUsers)
-    .where(eq(schema.authUsers.id, sess.userId))
-    .limit(1);
-  const u = uRows[0] ?? null;
+  const u = rows[0]?.user ?? null;
   if (u && u.identifier === DEMO_IDENTIFIER) {
     // A surviving session of the removed demo account: finish the
     // removal (account + all its records + this session) and report
@@ -1887,7 +1912,7 @@ export const Actions = {
       await ensureWorkspace(db, user.id, args.mode);
       if (current !== args.mode) {
         await setActiveMode(db, user.id, args.mode);
-        await log(db, "Mode switched", `${MODE_LABELS[args.mode]} workspace`, user.id);
+        await log(db, "Mode switched", `${MODE_LABELS[args.mode]} workspace`, user.id, args.mode);
       }
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { ok: true as const, mode: args.mode };
