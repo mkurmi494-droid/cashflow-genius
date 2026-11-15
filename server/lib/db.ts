@@ -45,18 +45,20 @@ const client = url
       // connection is still encrypted, and the password is never
       // sent in cleartext. Localhost keeps ssl off entirely.
       ssl: needsSsl ? { rejectUnauthorized: false } : false,
-      // Five connections, not one: getState/getCombinedSummary issue
-      // their ~19/10 reads in one Promise.all, but postgres-js runs
-      // every query on a single connection strictly one at a time —
-      // with max: 1 that "parallel" batch was really ~19 sequential
-      // cross-region round-trips, which is why the post-mode-switch
-      // refetch still took 15–30s live after the 1df9da0 fix that
-      // parallelised the queries (measured locally: 19 concurrent
-      // pg_sleep(50ms) took 985ms at max:1 vs 266ms at max:5). Five
-      // per serverless instance stays well inside what the Supabase
-      // session pooler (Supavisor) absorbs, and idle_timeout below
-      // still reaps connections an instance stops using.
-      max: 5,
+      // REVERTED 2026-11-15: max: 5 caused Supabase session-pooler
+      // exhaustion live (EMAXCONNSESSION "max clients reached in
+      // session mode", Vercel logs 06:15–06:17 UTC 15 Nov 2026) — a
+      // Business→Personal switch failed with "Your workspace could
+      // not be loaded" for ~6 minutes until the pool drained, while
+      // max: 1 never did that. Five per serverless instance times
+      // several concurrent Vercel instances exceeds what the free
+      // session pooler allows. Back to max: 1: the ~19-query batch
+      // runs sequentially (~15–30s live), but the loading gate in
+      // App.tsx now shows an honest "Loading …" skeleton instead of
+      // a wrong empty state while it runs. A real speedup needs
+      // fewer round-trips (one query, not a bigger pool) — do NOT
+      // raise max again without fixing that first.
+      max: 1,
       // Supabase's poolers (Supavisor) do not reliably support the
       // extended-protocol prepared statements postgres-js sends by
       // default: the transaction pooler rejects them outright, and a
