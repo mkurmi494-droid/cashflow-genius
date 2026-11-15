@@ -58,7 +58,16 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
   const switchMode = useMutation({
     mutationFn: (m: AppMode) => api.setMode({ mode: m }),
     onSuccess: (_res, m) => {
-      void queryClient.invalidateQueries();
+      // Narrow invalidation: the App-level cg:mutated listener
+      // already patches + refetches ["cg-state"] and ["cg-combined"]
+      // on setMode. Invalidating EVERYTHING here used to also refire
+      // ["briefing"] and ["cg-auth"] at the same instant — a third
+      // and fourth parallel connection during the switch burst, on
+      // top of the two ledger refetches. The briefing refetches
+      // itself when the transaction count changes; auth needs no
+      // refetch on a mode switch.
+      void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
       notify(
         m === active
           ? `You are already in ${MODE_LABELS[m]}.`

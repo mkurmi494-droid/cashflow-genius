@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Actions } from "@/server/actions";
-import { safeErrorMessage } from "@/server/lib/db";
+import { isPoolExhaustedError, safeErrorMessage } from "@/server/lib/db";
 
 // One route serves every ported server action: POST /api/<action-name>
 // with the action's request JSON. The action's zod request schema is
@@ -55,17 +55,61 @@ export async function POST(
       { status: 400 },
     );
   }
+  // Read-only actions are safe to retry whole: they write nothing
+  // (the only writes inside getState/getBriefing are first-visit
+  // workspace / state-row creates, both guarded by existence checks
+  // and onConflictDoNothing), so a retry can never double-apply
+  // anything. Pool exhaustion is transient — an idle connection
+  // drains within seconds — so a read retried a moment later usually
+  // succeeds, and the client keeps showing its loading skeleton
+  // instead of the full-screen "could not be loaded" error.
+  // Delays (1s, 3s, 6s) span the idle drain; worst case the read
+  // takes ~10s, still far better than failing outright. Mutations
+  // are NEVER retried here: a half-applied write must not run twice.
+  const READ_RETRY_ACTIONS = new Set([
+    "getState",
+    "getCombinedSummary",
+    "getBriefing",
+    "authStatus",
+    "getSupabaseAuthStatus",
+    "getIntegrationStatus",
+    "exportBackup",
+    "listNoteVersions",
+  ]);
+  const POOL_RETRY_DELAYS_MS = [1000, 3000, 6000];
   try {
-    const result = await def.handler({ invalidateQueries: () => {} }, args as never);
-    const checked = def.response.safeParse(result);
-    if (!checked.success) {
-      console.error(`[cashflow-genius] ${action} returned an invalid response:`, checked.error);
-      return NextResponse.json(
-        { error: `The server returned an unexpected result for ${action}. Please try again.` },
-        { status: 500 },
-      );
+    let attempt = 0;
+    for (;;) {
+      try {
+        const result = await def.handler({ invalidateQueries: () => {} }, args as never);
+        const checked = def.response.safeParse(result);
+        if (!checked.success) {
+          console.error(`[cashflow-genius] ${action} returned an invalid response:`, checked.error);
+          return NextResponse.json(
+            { error: `The server returned an unexpected result for ${action}. Please try again.` },
+            { status: 500 },
+          );
+        }
+        return NextResponse.json(checked.data);
+      } catch (e) {
+        if (
+          READ_RETRY_ACTIONS.has(action) &&
+          isPoolExhaustedError(e) &&
+          attempt < POOL_RETRY_DELAYS_MS.length
+        ) {
+          const delay = POOL_RETRY_DELAYS_MS[attempt] as number;
+          attempt++;
+          console.error(
+            `[cashflow-genius] ${action} hit pool exhaustion, retry ${attempt}/${POOL_RETRY_DELAYS_MS.length} in ${delay}ms`,
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        // Not a retryable pool error (or retries spent): hand the
+        // error to the shared handling in the outer catch.
+        throw e;
+      }
     }
-    return NextResponse.json(checked.data);
   } catch (e) {
     // The full error stays on the server (Vercel logs) so the real
     // cause can be diagnosed there; the client only ever gets a

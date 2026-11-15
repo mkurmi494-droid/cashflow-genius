@@ -170,6 +170,39 @@ async function callAction(
   return data;
 }
 
+// ---- one ledger read at a time (pool-exhaustion fix, 2026-11-15) ----
+// A dashboard load fires getState + getCombinedSummary + getBriefing
+// together, and a mode switch refetches them together — each is a
+// separate Vercel serverless invocation holding its own database
+// connection, so one user alone can hold 3 of the session pooler's
+// 15 slots, and a burst across instances exhausts it (EMAXCONNSESSION
+// "max clients reached in session mode", even after the max:1 revert).
+// The three reads queue behind each other here, so peak connections
+// per tab drop from 3 to 1. The total wall time is the same work the
+// server would have serialised on max:1 anyway; the panels just wait
+// their turn instead of failing together. Mutations and auth calls
+// are NOT queued — only these three reads. A failed read never blocks
+// the queue: the chain is kept alive with a caught copy.
+const LEDGER_READ_ACTIONS = new Set([
+  "getState",
+  "getCombinedSummary",
+  "getBriefing",
+]);
+let ledgerReadQueue: Promise<unknown> = Promise.resolve();
+
+function callActionQueued(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  if (!LEDGER_READ_ACTIONS.has(name)) return callAction(name, args);
+  const p = ledgerReadQueue.then(
+    () => callAction(name, args),
+    () => callAction(name, args),
+  );
+  ledgerReadQueue = p.catch(() => {});
+  return p;
+}
+
 // Every action call automatically carries the session token; the server
 // verifies it and scopes all data to the signed-in account.
 export const api = new Proxy(
@@ -177,7 +210,7 @@ export const api = new Proxy(
   {
     get(_target, prop) {
       return (args: Record<string, unknown> = {}) =>
-        callAction(String(prop), { ...args, token: getAuthToken() });
+        callActionQueued(String(prop), { ...args, token: getAuthToken() });
     },
   },
 ) as unknown as ApiClient;

@@ -14,6 +14,12 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import * as schema from "./schema";
 import { db, checkDatabase, dbErrorCode } from "./lib/db";
 import { aiComplete, getUserGeminiKey } from "./lib/ai";
+import {
+  loadBriefingBatch,
+  loadCombinedBatch,
+  loadWorkspaceBatch,
+  loadWorkspacePrelude,
+} from "./lib/batch";
 
 type Db = typeof db;
 
@@ -1553,136 +1559,58 @@ export const Actions = {
     async handler(ctx, args) {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
-      const wsMode = await activeMode(db, user.id);
-      const business = await ensureWorkspace(db, user.id, wsMode);
-      // All reads below are independent once the user, active mode and
-      // workspace exist, so they run in ONE Promise.all instead of ~20
-      // sequential round-trips. Sequentially this made getState take
-      // ~15–20s on a live cold start (Vercel → Supabase pooler), so
-      // every post-mutation refetch looked stale until a reload.
-      // The three previously unscoped full-table scans (invoice items,
-      // EMI instalments, AI messages — every user's rows, loaded into
-      // memory) are now scoped to this owner's records via subqueries.
-      const [
-        workspaceRows,
-        txns,
-        invs,
-        items,
-        notesRows,
-        scen,
-        rec,
-        emiPlanRows,
-        emiInstRows,
-        savingsGoalRows,
-        savingsTransferRows,
-        scamRows,
-        buds,
-        customCats,
-        convs,
-        msgs,
-        acts,
-        cursorStyle,
-        geminiKey,
-      ] = await Promise.all([
-        db.select().from(schema.businesses).where(eq(schema.businesses.ownerId, user.id)),
-        db
-          .select()
-          .from(schema.transactions)
-          .where(and(eq(schema.transactions.ownerId, user.id), eq(schema.transactions.mode, wsMode)))
-          .orderBy(desc(schema.transactions.date), desc(schema.transactions.createdAt)),
-        db
-          .select()
-          .from(schema.invoices)
-          .where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode)))
-          .orderBy(desc(schema.invoices.createdAt)),
-        db
-          .select()
-          .from(schema.invoiceItems)
-          .where(
-            inArray(
-              schema.invoiceItems.invoiceId,
-              db
-                .select({ id: schema.invoices.id })
-                .from(schema.invoices)
-                .where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode))),
-            ),
-          ),
-        db
-          .select()
-          .from(schema.notes)
-          .where(and(eq(schema.notes.ownerId, user.id), eq(schema.notes.mode, wsMode)))
-          .orderBy(desc(schema.notes.pinned), desc(schema.notes.updatedAt)),
-        db
-          .select()
-          .from(schema.scenarios)
-          .where(and(eq(schema.scenarios.ownerId, user.id), eq(schema.scenarios.mode, wsMode)))
-          .orderBy(desc(schema.scenarios.updatedAt)),
-        db.select().from(schema.recurringCashflows).where(and(eq(schema.recurringCashflows.ownerId, user.id), eq(schema.recurringCashflows.mode, wsMode))),
-        db
-          .select()
-          .from(schema.emiPlans)
-          .where(and(eq(schema.emiPlans.ownerId, user.id), eq(schema.emiPlans.mode, wsMode)))
-          .orderBy(desc(schema.emiPlans.createdAt)),
-        db
-          .select()
-          .from(schema.emiInstalments)
-          .where(
-            inArray(
-              schema.emiInstalments.planId,
-              db
-                .select({ id: schema.emiPlans.id })
-                .from(schema.emiPlans)
-                .where(and(eq(schema.emiPlans.ownerId, user.id), eq(schema.emiPlans.mode, wsMode))),
-            ),
-          ),
-        db
-          .select()
-          .from(schema.savingsGoals)
-          .where(and(eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)))
-          .orderBy(desc(schema.savingsGoals.createdAt)),
-        db
-          .select()
-          .from(schema.savingsTransfers)
-          .where(and(eq(schema.savingsTransfers.ownerId, user.id), eq(schema.savingsTransfers.mode, wsMode))),
-        db
-          .select()
-          .from(schema.scamChecks)
-          .where(and(eq(schema.scamChecks.ownerId, user.id), eq(schema.scamChecks.mode, wsMode)))
-          .orderBy(desc(schema.scamChecks.createdAt))
-          .limit(10),
-        db.select().from(schema.budgets).where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode))),
-        db
-          .select()
-          .from(schema.customCategories)
-          .where(and(eq(schema.customCategories.ownerId, user.id), eq(schema.customCategories.mode, wsMode)))
-          .orderBy(asc(schema.customCategories.name)),
-        db
-          .select()
-          .from(schema.aiConversations)
-          .where(and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode)))
-          .orderBy(desc(schema.aiConversations.createdAt)),
-        db
-          .select()
-          .from(schema.aiMessages)
-          .where(
-            inArray(
-              schema.aiMessages.conversationId,
-              db
-                .select({ id: schema.aiConversations.id })
-                .from(schema.aiConversations)
-                .where(and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode))),
-            ),
-          )
-          .orderBy(asc(schema.aiMessages.createdAt)),
-        db
-          .select()
-          .from(schema.activityLogs)
-          .where(and(eq(schema.activityLogs.ownerId, user.id), eq(schema.activityLogs.mode, wsMode)))
-          .orderBy(desc(schema.activityLogs.id))
-          .limit(25),
-        cursorStyleOf(db, user.id),
-        geminiKeyOf(db, user.id),
-      ]);
+      // ONE statement for the state row + all workspace rows, then ONE
+      // statement for every collection in the active workspace (see
+      // server/lib/batch.ts) — 3 statements total including the auth
+      // join above, down from ~25. The old code ran a 19-query
+      // Promise.all that max:1 serialised into 15-30s live; raising
+      // the pool instead exhausted the session pooler (bcd6255 ->
+      // b8b0b9e). Fewer round-trips is the fix; the pool stays at 1.
+      let { state, businesses: workspaceRows } = await loadWorkspacePrelude(
+        db,
+        user.id,
+      );
+      // Brand-new account (no state row yet): derive the mode exactly
+      // as activeMode() did, and create the row so later reads find it.
+      let wsMode = state
+        ? asMode(state.activeMode)
+        : asMode(workspaceRows[0]?.mode ?? "business");
+      let business = workspaceRows.find((b) => asMode(b.mode) === wsMode);
+      if (!business) {
+        // First visit to this workspace: create it exactly as before,
+        // then re-read the workspace list. Rare path only.
+        business = await ensureWorkspace(db, user.id, wsMode);
+        workspaceRows = (await loadWorkspacePrelude(db, user.id)).businesses;
+      }
+      const cursorStyle = state ? asCursorStyle(state.cursorStyle) : "blue";
+      const geminiKey = state?.geminiApiKey
+        ? { saved: true as const, last4: state.geminiApiKey.slice(-4) }
+        : { saved: false as const, last4: "" };
+      const tourDismissed = state?.tourDismissed === 1;
+      if (!state) {
+        await db
+          .insert(schema.userWorkspaceState)
+          .values({ ownerId: user.id, activeMode: wsMode })
+          .onConflictDoNothing();
+      }
+      const {
+        transactions: txns,
+        invoices: invs,
+        invoiceItems: items,
+        notes: notesRows,
+        scenarios: scen,
+        recurring: rec,
+        emiPlans: emiPlanRows,
+        emiInstalments: emiInstRows,
+        savingsGoals: savingsGoalRows,
+        savingsTransfers: savingsTransferRows,
+        scamChecks: scamRows,
+        budgets: buds,
+        customCategories: customCats,
+        aiConversations: convs,
+        aiMessages: msgs,
+        activity: acts,
+      } = await loadWorkspaceBatch(db, user.id, wsMode);
       const itemsByInv = new Map<string, ItemRow[]>();
       for (const it of items) {
         const arr = itemsByInv.get(it.invoiceId) ?? [];
@@ -1833,7 +1761,7 @@ export const Actions = {
           detail: a.detail,
           createdAt: a.createdAt.toISOString(),
         })),
-        tourDismissed: await tourDismissedOf(db, user.id),
+        tourDismissed,
         authUser: {
           identifier: user.identifier,
           channel: user.channel,
@@ -2057,55 +1985,31 @@ export const Actions = {
     async handler(ctx, args) {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
-      const current = await activeMode(db, user.id);
+      // ONE statement for the state row + every collection across all
+      // modes (see server/lib/batch.ts) — 2 statements total including
+      // the auth join, down from ~12.
+      const combined = await loadCombinedBatch(db, user.id);
+      const current = combined.state
+        ? asMode(combined.state.activeMode)
+        : asMode(combined.businesses[0]?.mode ?? "business");
+      const {
+        businesses: bizRows,
+        transactions: allTxns,
+        invoices: allInvs,
+        invoiceItems: allItems,
+        recurring: allRec,
+        budgets: allBuds,
+        emiPlans: allPlans,
+        emiInstalments: allInst,
+        savingsGoals: allSavingsGoals,
+        savingsTransfers: allSavingsTransfers,
+      } = combined;
       const today = todayStr();
       const in30 = (() => {
         const d = new Date(`${today}T00:00:00Z`);
         d.setUTCDate(d.getUTCDate() + 30);
         return d.toISOString().slice(0, 10);
       })();
-      // Same as getState (2026-11-15): independent reads run in one
-      // Promise.all, and the two unscoped full-table scans are scoped
-      // to this owner's invoices / EMI plans via subqueries.
-      const [
-        bizRows,
-        allTxns,
-        allInvs,
-        allItems,
-        allRec,
-        allBuds,
-        allPlans,
-        allInst,
-        allSavingsGoals,
-        allSavingsTransfers,
-      ] = await Promise.all([
-        db.select().from(schema.businesses).where(eq(schema.businesses.ownerId, user.id)),
-        db.select().from(schema.transactions).where(eq(schema.transactions.ownerId, user.id)),
-        db.select().from(schema.invoices).where(eq(schema.invoices.ownerId, user.id)),
-        db
-          .select()
-          .from(schema.invoiceItems)
-          .where(
-            inArray(
-              schema.invoiceItems.invoiceId,
-              db.select({ id: schema.invoices.id }).from(schema.invoices).where(eq(schema.invoices.ownerId, user.id)),
-            ),
-          ),
-        db.select().from(schema.recurringCashflows).where(eq(schema.recurringCashflows.ownerId, user.id)),
-        db.select().from(schema.budgets).where(eq(schema.budgets.ownerId, user.id)),
-        db.select().from(schema.emiPlans).where(eq(schema.emiPlans.ownerId, user.id)),
-        db
-          .select()
-          .from(schema.emiInstalments)
-          .where(
-            inArray(
-              schema.emiInstalments.planId,
-              db.select({ id: schema.emiPlans.id }).from(schema.emiPlans).where(eq(schema.emiPlans.ownerId, user.id)),
-            ),
-          ),
-        db.select().from(schema.savingsGoals).where(eq(schema.savingsGoals.ownerId, user.id)),
-        db.select().from(schema.savingsTransfers).where(eq(schema.savingsTransfers.ownerId, user.id)),
-      ]);
       const itemsByInv = new Map<string, ItemRow[]>();
       for (const it of allItems) {
         const arr = itemsByInv.get(it.invoiceId) ?? [];
@@ -4402,11 +4306,22 @@ export const Actions = {
     async handler(ctx, args) {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
-      const wsMode = await activeMode(db, user.id);
-      const business = await ensureWorkspace(db, user.id, wsMode);
-      const txns = await db.select().from(schema.transactions).where(and(eq(schema.transactions.ownerId, user.id), eq(schema.transactions.mode, wsMode)));
-      const invs = await db.select().from(schema.invoices).where(and(eq(schema.invoices.ownerId, user.id), eq(schema.invoices.mode, wsMode)));
-      const briefingTransfers = await db.select().from(schema.savingsTransfers).where(and(eq(schema.savingsTransfers.ownerId, user.id), eq(schema.savingsTransfers.mode, wsMode)));
+      // Prelude + one batch statement (3 statements total with the
+      // auth join, down from 7): getBriefing is the dashboard's
+      // third parallel read, so every statement it saves is one less
+      // connection held during a mode-switch burst.
+      const { state, businesses: briefingBusinesses } =
+        await loadWorkspacePrelude(db, user.id);
+      const wsMode = state
+        ? asMode(state.activeMode)
+        : asMode(briefingBusinesses[0]?.mode ?? "business");
+      let business = briefingBusinesses.find((b) => asMode(b.mode) === wsMode);
+      if (!business) business = await ensureWorkspace(db, user.id, wsMode);
+      const {
+        transactions: txns,
+        invoices: invs,
+        savingsTransfers: briefingTransfers,
+      } = await loadBriefingBatch(db, user.id, wsMode);
       const briefingSaved = briefingTransfers.reduce((s, t) => s + (t.direction === "deposit" ? t.amountCents : -t.amountCents), 0);
       const s = summarise(business, txns, briefingSaved);
       const overdue = invs.filter((i) => effectiveStatus(i) === "overdue");
@@ -4429,7 +4344,7 @@ export const Actions = {
             points: z.array(z.string()).min(1).max(5),
           }),
         },
-        { geminiKey: await getUserGeminiKey(user.id) },
+        { geminiKey: state?.geminiApiKey ?? null },
       );
       return {
         headline: result.headline,

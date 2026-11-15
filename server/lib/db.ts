@@ -12,6 +12,7 @@
 // Never put the Supabase service-role key here; this connection uses
 // the postgres password only, and every query is still scoped by
 // owner_id in the actions.
+import { appendFileSync } from "node:fs";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../schema";
@@ -45,19 +46,33 @@ const client = url
       // connection is still encrypted, and the password is never
       // sent in cleartext. Localhost keeps ssl off entirely.
       ssl: needsSsl ? { rejectUnauthorized: false } : false,
-      // REVERTED 2026-11-15: max: 5 caused Supabase session-pooler
-      // exhaustion live (EMAXCONNSESSION "max clients reached in
-      // session mode", Vercel logs 06:15–06:17 UTC 15 Nov 2026) — a
-      // Business→Personal switch failed with "Your workspace could
-      // not be loaded" for ~6 minutes until the pool drained, while
-      // max: 1 never did that. Five per serverless instance times
-      // several concurrent Vercel instances exceeds what the free
-      // session pooler allows. Back to max: 1: the ~19-query batch
-      // runs sequentially (~15–30s live), but the loading gate in
-      // App.tsx now shows an honest "Loading …" skeleton instead of
-      // a wrong empty state while it runs. A real speedup needs
-      // fewer round-trips (one query, not a bigger pool) — do NOT
-      // raise max again without fixing that first.
+      // max: 1 stays. REVERTED 2026-11-15: max: 5 caused Supabase
+      // session-pooler exhaustion live (EMAXCONNSESSION "max clients
+      // reached in session mode", Vercel logs 06:15–06:17 UTC 15 Nov
+      // 2026) — a Business→Personal switch failed with "Your
+      // workspace could not be loaded" for ~6 minutes until the pool
+      // drained, while max: 1 never did that. Five per serverless
+      // instance times several concurrent Vercel instances exceeds
+      // what the free session pooler allows. BUT the revert alone did
+      // NOT fix it: 12 more EMAXCONNSESSION errors hit the revert
+      // deployment (06:24–06:27 UTC, /api/getState,
+      // /api/getCombinedSummary, /api/getBriefing) — max:1 per
+      // instance is not enough when the client fires three ledger
+      // reads in parallel and Vercel runs each in its own invocation,
+      // each holding its own connection, against a 15-client pool.
+      // The real fix (2026-11-15, same day) is threefold and lives
+      // outside this option: (1) FEWER round-trips — getState is 3
+      // statements, getCombinedSummary 2, getBriefing 3 (single-
+      // statement JSON batch loads, server/lib/batch.ts); (2) the
+      // client serialises the three ledger reads (client/api.ts) and
+      // the API route retries read-only actions on pool exhaustion
+      // with backoff (app/api/[action]/route.ts); (3) idle connections
+      // drain in 5s instead of 20s (idle_timeout below). Do NOT raise
+      // max again. The durable fix for the 15-client ceiling is the
+      // Supabase TRANSACTION pooler (port 6543) as DATABASE_URL — the
+      // code uses no session-level features (prepare:false, no
+      // LISTEN/advisory locks/temp tables/SET, no db.transaction),
+      // so it is safe; that is a Vercel env change, not a code change.
       max: 1,
       // Supabase's poolers (Supavisor) do not reliably support the
       // extended-protocol prepared statements postgres-js sends by
@@ -77,8 +92,39 @@ const client = url
       // 3.4.9 clamps it with Math.max(0, …). Do not downgrade.
       prepare: false,
       connect_timeout: 10,
-      idle_timeout: 20,
-      max_lifetime: 60 * 30,
+      // Drain idle connections fast: with max:1 every warm Vercel
+      // instance holds one pool slot while idle, and the session
+      // pooler only allows 15 clients total — a burst of concurrent
+      // invocations (dashboard load, mode switch) filled it even
+      // after the max:1 revert (EMAXCONNSESSION, 2026-11-15). 5s of
+      // idle releases the slot instead of 20s; the price is an
+      // occasional TLS reconnect on the next query after idle, which
+      // is one handshake per invocation, not per statement (the batch
+      // loads are single statements). max_lifetime 10min recycles
+      // long-lived connections before the pooler kills them mid-use.
+      idle_timeout: 5,
+      max_lifetime: 60 * 10,
+      // Local-only query counting: when CG_QUERY_LOG is set (harness
+      // runs), every statement the driver sends is appended to that
+      // file (one line per statement) so the harness can assert the
+      // per-call round-trip count. Off by default and never set in
+      // production — it exists because local timing proves nothing
+      // about live latency (localhost RTT is free) while the
+      // STATEMENT COUNT is what the live 15–30s refetch is made of.
+      // Each line is the first 200 chars of the statement with
+      // whitespace collapsed; parameters are never written.
+      debug: process.env.CG_QUERY_LOG
+        ? (_connection: number, query: string) => {
+            try {
+              appendFileSync(
+                process.env.CG_QUERY_LOG as string,
+                query.replace(/\s+/g, " ").slice(0, 200) + "\n",
+              );
+            } catch {
+              /* counting must never break a query */
+            }
+          }
+        : false,
     })
   : null;
 
@@ -127,6 +173,34 @@ export function isDatabaseError(e: unknown): boolean {
   return dbErrorCode(e) !== null;
 }
 
+/** True when this error is a database connection-pool exhaustion:
+ *  Supavisor's session pooler (code XX000, "max clients reached in
+ *  session mode — max clients are limited to pool_size: N") or plain
+ *  Postgres "too many connections" (53300). Both mean the same thing
+ *  for the user — the database is briefly out of free connections —
+ *  and both are transient: a retry a moment later usually succeeds
+ *  once an idle connection drains. The message is read down the
+ *  cause chain, because Drizzle wraps the real Postgres error inside
+ *  "Failed query: <SQL>" and the outer message never names the pool.
+ *  (2026-11-15: the max:1 revert did NOT stop this — concurrent
+ *  Vercel invocations each hold their own connection, so the pool
+ *  still filled up. See the route's retry loop.) */
+export function isPoolExhaustedError(e: unknown): boolean {
+  const code = dbErrorCode(e);
+  let messages = "";
+  let cur: unknown = e;
+  for (let i = 0; i < 5 && cur; i++) {
+    if (cur instanceof Error) messages += ` ${cur.message}`;
+    else if (typeof cur === "string") messages += ` ${cur}`;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  if (code === "53300") return true;
+  if (code === "XX000" && /max clients/i.test(messages)) return true;
+  return /max clients reached in session mode|too many connections/i.test(
+    messages,
+  );
+}
+
 /** Plain-language message for a database failure. Safe to show to the
  *  user: it never contains SQL, parameters, connection strings or
  *  passwords. */
@@ -134,6 +208,8 @@ export function dbErrorMessage(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e ?? "");
   if (!url || /DATABASE_URL is not set/.test(msg))
     return "The database connection isn't set up on the server yet (DATABASE_URL is missing). Please add the Supabase Postgres connection string in Vercel → Settings → Environment Variables as DATABASE_URL, then redeploy.";
+  if (isPoolExhaustedError(e))
+    return "The database is busy just now — too many connections at once. Nothing was lost; please wait a moment and try again.";
   const code = dbErrorCode(e);
   switch (code) {
     case "28P01":
