@@ -31,30 +31,76 @@ const SUGGESTED_HI = [
   "Kya meri savings sahi speed par hai?",
 ];
 
+/** "What the AI used — sources" as a collapsed block: only the heading
+ *  and a Read more button show by default, so a long sources list no
+ *  longer pushes the answer down the page. Tapping Read more reveals
+ *  the explainer and the full list; Show less collapses it again. */
+function SourcesBlock({
+  num,
+  sources,
+  language,
+}: {
+  num: number;
+  sources: string[];
+  language?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-xl border border-[var(--accent)]/25 bg-[var(--surface-soft)] px-3 py-2.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 text-left"
+      >
+        <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--accent)]">
+          {num} · What the AI used — sources {language === "hinglish" ? "· Hinglish answer" : ""}
+        </h3>
+        <span className="shrink-0 text-xs font-bold text-[var(--accent)]">
+          {open ? "Show less ▴" : `Read more (${sources.length}) ▾`}
+        </span>
+      </button>
+      {open ? (
+        <>
+          <p className="mt-0.5 text-xs text-[var(--dim)]">
+            Ye exact figures aur dates hain jo is answer ko banane mein use hue — server par
+            tumhare active workspace ke records se calculate kiye gaye. AI ne koi number
+            invent nahi kiya; number galat lage to pehle yehi sources check karo.
+          </p>
+          <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm text-[var(--dim)]">
+            {sources.map((d, i) => (
+              <li key={i}>{d}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** The AI answers in the language the question was asked in — there is
+ *  no language toggle. Devanagari script, or a distinctive Hinglish
+ *  word, means Hinglish; everything else is English. */
+function detectQuestionLang(q: string): CfoLang {
+  if (/[\u0900-\u097F]/.test(q)) return "hinglish";
+  if (
+    /\b(kya|kyun|kaise|kitna|kitne|kitni|kahan|kab|mera|meri|mere|mujhe|tumhara|tumhari|tumhare|aapka|aapki|paisa|kharcha|kharche|bachat|mahina|raha|rahi|rahe|batao|bataiye|chahiye|sakta|sakti|sakte|nahi|hai|hain|aur|bhi|ho|tha|thi|kar|karo)\b/i.test(
+      q,
+    )
+  ) {
+    return "hinglish";
+  }
+  return "en";
+}
+
 export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
   const cur = state.business.currency;
   const s = useMemo(() => summarise(state), [state]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
-  const [lang, setLang] = useState<CfoLang>(() => {
-    try {
-      return localStorage.getItem("cg_cfo_lang") === "hinglish" ? "hinglish" : "en";
-    } catch {
-      return "en";
-    }
-  });
   const [localTurns, setLocalTurns] = useState<
     { q: string; a: CfoAnswer }[]
   >([]);
-
-  const pickLang = (l: CfoLang) => {
-    setLang(l);
-    try {
-      localStorage.setItem("cg_cfo_lang", l);
-    } catch {
-      /* storage unavailable — the toggle still works for this session */
-    }
-  };
 
   const active = state.conversations.find((c) => c.id === activeId) ?? null;
 
@@ -70,7 +116,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
 
   const ask = useMutation({
     mutationFn: (q: string) =>
-      api.askCfo({ conversationId: activeId, question: q, language: lang }),
+      api.askCfo({ conversationId: activeId, question: q, language: detectQuestionLang(q) }),
     onSuccess: (res, q) => {
       setActiveId(res.conversationId);
       setLocalTurns((t) => [...t, { q, a: res.answer }]);
@@ -169,21 +215,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
           <p className="mt-1 text-sm text-[var(--warn-text)]">{a.assumptions}</p>
         </div>
         {a.sources && a.sources.length > 0 ? (
-          <div className="rounded-xl border border-[var(--accent)]/25 bg-[var(--surface-soft)] px-3 py-2.5">
-            <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--accent)]">
-              {num()} · What the AI used — sources {a.language === "hinglish" ? "· Hinglish answer" : ""}
-            </h3>
-            <p className="mt-0.5 text-xs text-[var(--dim)]">
-              Ye exact figures aur dates hain jo is answer ko banane mein use hue — server par
-              tumhare active workspace ke records se calculate kiye gaye. AI ne koi number
-              invent nahi kiya; number galat lage to pehle yehi sources check karo.
-            </p>
-            <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm text-[var(--dim)]">
-              {a.sources.map((d, i) => (
-                <li key={i}>{d}</li>
-              ))}
-            </ul>
-          </div>
+          <SourcesBlock num={num()} sources={a.sources} language={a.language} />
         ) : null}
         <button
           type="button"
@@ -220,46 +252,6 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
           <GlassOrb size={150} tone="ai" label="AI CFO" sub="The brain of your ledger" />
           <div className="text-center sm:text-left">
             <h1 className="display-font text-[27px] font-semibold tracking-tight">AI CFO</h1>
-            <p className="mt-1 max-w-lg text-sm text-[var(--dim)]">
-              Ask in plain language — English, Hindi ya Hinglish, teeno chalega. Every answer
-              is generated on the server from your calculated figures — cash, runway, overdue
-              invoices with amounts and dates, biggest leaks, savings pace, next 30 days ke
-              dues — never from invented numbers. Har answer ke neeche{" "}
-              <strong className="text-[var(--text)]">“What the AI used”</strong> mein exact
-              figures aur dates dikhte hain jo use hue.
-            </p>
-            <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="AI CFO answer language">
-              <span className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">Answer language:</span>
-              {(
-                [
-                  { key: "en", label: "English" },
-                  { key: "hinglish", label: "Hinglish / Hindi" },
-                ] as const
-              ).map((o) => (
-                <button
-                  key={o.key}
-                  type="button"
-                  aria-pressed={lang === o.key}
-                  onClick={() => pickLang(o.key)}
-                  className={`rounded-full px-3.5 py-2 text-xs font-extrabold transition ${
-                    lang === o.key
-                      ? "bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(124,58,237,0.28)]"
-                      : "bg-white text-[var(--dim)] shadow-[inset_0_0_0_1px_var(--border)]"
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-              <span className="text-xs text-[var(--dim)]">
-                {lang === "hinglish" ? "Ab jawab Hinglish mein aayega — sawaal kisi bhi language mein poochho." : "Answers in English — you can still ask in Hindi or Hinglish."}
-              </span>
-            </div>
-            <div className="mt-3 rounded-xl border border-[var(--border)] bg-white/70 px-3 py-2 text-left text-xs text-[var(--dim)]">
-              <strong className="text-[var(--text)]">AI engine:</strong>{" "}
-              ChatGPT (gpt-4o-mini) answers for everyone — one shared key on the server, no key
-              needed from you. Until a real ChatGPT call succeeds, the rule-based fallback
-              answers from your real figures below.
-            </div>
           </div>
         </div>
       </section>
@@ -394,7 +386,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
         <div className="space-y-5 lg:col-span-3">
           <section aria-label="Suggested questions">
             <div className="flex flex-wrap gap-2">
-              {(lang === "hinglish" ? SUGGESTED_HI : SUGGESTED_EN).map((q) => (
+              {[...SUGGESTED_HI, ...SUGGESTED_EN].map((q) => (
                 <button
                   key={q}
                   type="button"
@@ -452,7 +444,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
           </div>
 
           <form
-            className="card flex flex-col gap-3 p-4 sm:flex-row"
+            className="card sticky bottom-16 z-30 flex flex-col gap-3 p-4 shadow-[0_-8px_24px_rgba(76,29,149,0.10)] sm:flex-row lg:bottom-0"
             onSubmit={(e) => {
               e.preventDefault();
               submit(question);
@@ -464,11 +456,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
             <input
               id="cfo-question"
               className="field flex-1"
-              placeholder={
-                lang === "hinglish"
-                  ? "e.g. Kya main is month ₹50,000 marketing par kharch kar sakta hoon?"
-                  : "e.g. Can I afford to spend ₹50,000 on marketing this month?"
-              }
+              placeholder="Ask in English or Hinglish — e.g. Can I afford ₹50,000 on marketing this month?"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               maxLength={1000}
