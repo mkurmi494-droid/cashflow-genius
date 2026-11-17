@@ -361,6 +361,33 @@ export const userWorkspaceState = pgTable("user_workspace_state", {
   // does NOT make Gemini "live" — the Live connections status stays
   // "Not connected" until a Gemini call is actually wired and verified.
   geminiApiKey: text("gemini_api_key"),
+  // Which AI engine answers the AI CFO: "gemini" (default — Google AI
+  // Studio key, gemini-3.8-flash) or "openrouter" (OpenRouter key, any
+  // model id, defaulting to a free :free model). Per ACCOUNT, like the
+  // cursor style. Switching provider never touches records — only
+  // which engine the CFO calls — and it clears the verified flag
+  // below, so the new provider must prove itself with a real call.
+  aiProvider: text("ai_provider").notNull().default("gemini"),
+  // The account's own OpenRouter API key, IF they choose to save one
+  // in Settings. Same server-side-only rule as geminiApiKey: never
+  // returned to the browser, only saved + last 4 characters.
+  openRouterApiKey: text("openrouter_api_key"),
+  // The OpenRouter model id used when OpenRouter is the provider.
+  // Default is a free model (google/gemma-4-31b-it:free); the free
+  // roster rotates, so the user can change this in Settings — any
+  // :free model costs nothing (capped at 50 requests/day without
+  // credits), and a paid model id such as openai/gpt-4o-mini works
+  // through the same endpoint when the account has credits.
+  openRouterModel: text("openrouter_model")
+    .notNull()
+    .default("google/gemma-4-31b-it:free"),
+  // When a real AI call last succeeded, and with which provider. The
+  // Live connections probe shows an engine "Live" only when this flag
+  // names the currently selected provider — a saved key alone is never
+  // enough. Cleared whenever the provider, key or model changes, so a
+  // new configuration must prove itself again.
+  aiVerifiedAt: timestamp("ai_verified_at", { mode: "date" }),
+  aiVerifiedProvider: text("ai_verified_provider"),
 });
 
 // ---------- custom categories (user-typed, remembered per workspace) ----------
