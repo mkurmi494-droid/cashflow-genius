@@ -167,6 +167,29 @@ export type CalcSize = "small" | "medium" | "large";
 const CALC_SIZE_KEY = "cg_calc_size";
 const CALC_WIDTH_KEY = "cg_calc_width";
 const CALC_COMPACT_KEY = "cg_calc_compact";
+const CALC_HISTORY_KEY = "cg_calc_history";
+
+// History is also kept in localStorage (last 10, same cap as in-memory),
+// so a mode switch — which remounts the app shell — no longer wipes it.
+function loadCalcHistory(): CalcHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(CALC_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (x): x is CalcHistoryItem =>
+          typeof x === "object" &&
+          x !== null &&
+          typeof (x as { expr?: unknown }).expr === "string" &&
+          typeof (x as { result?: unknown }).result === "string",
+      )
+      .slice(0, 10);
+  } catch {
+    return [];
+  }
+}
 
 const SIZE_WIDTHS: Record<CalcSize, number> = { small: 296, medium: 352, large: 448 };
 
@@ -207,7 +230,14 @@ export function CalculatorPanel({
   const [expr, setExpr] = useState("");
   const [justEvaluated, setJustEvaluated] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<CalcHistoryItem[]>([]);
+  const [history, setHistory] = useState<CalcHistoryItem[]>(loadCalcHistory);
+
+  // Keep the stored copy in step with the visible history.
+  useEffect(() => {
+    try {
+      localStorage.setItem(CALC_HISTORY_KEY, JSON.stringify(history));
+    } catch { /* storage unavailable — history just won't persist */ }
+  }, [history]);
   const [size, setSize] = useState<CalcSize>(loadCalcSize);
   const [customWidth, setCustomWidth] = useState<number | null>(loadCalcWidth);
   const [compact, setCompact] = useState<boolean>(loadCalcCompact);

@@ -116,7 +116,12 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
     ? localTurns.slice(storedTurns.length)
     : localTurns;
 
-  const answerCard = (a: CfoAnswer, q: string, key: number) => (
+  // Section numbers are assigned at render time, in order, so that hidden
+  // (empty) sections never leave gaps like 1, 3, 5 in the visible headings.
+  const answerCard = (a: CfoAnswer, q: string, key: number) => {
+    let n = 0;
+    const num = () => ++n;
+    return (
     <article key={key} className="card rise overflow-hidden">
       <div className="border-b border-[var(--border)] bg-[var(--ai)] px-4 py-3">
         <p className="text-sm font-bold text-[var(--ai-text)]">You asked</p>
@@ -125,14 +130,14 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
       <div className="space-y-4 px-4 py-4">
         <div>
           <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-            1 · Direct answer
+            {num()} · Direct answer
           </h3>
           <p className="mt-1 font-semibold">{a.directAnswer}</p>
         </div>
         {a.numbers.length > 0 ? (
           <div>
             <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-              2 · Relevant numbers
+              {num()} · Relevant numbers
             </h3>
             <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
               {a.numbers.map((n, i) => (
@@ -146,14 +151,14 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
         ) : null}
         <div>
           <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-            3 · Explanation
+            {num()} · Explanation
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">{a.explanation}</p>
         </div>
         {a.supportingData.length > 0 ? (
           <div>
             <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-              4 · Supporting data
+              {num()} · Supporting data
             </h3>
             <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-[var(--dim)]">
               {a.supportingData.map((d, i) => (
@@ -165,7 +170,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
         {a.options.length > 0 ? (
           <div>
             <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-              5 · Suggested options
+              {num()} · Suggested options
             </h3>
             <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-[var(--dim)]">
               {a.options.map((d, i) => (
@@ -176,14 +181,14 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
         ) : null}
         <div className="rounded-xl bg-[var(--warn)] px-3 py-2">
           <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--warn-text)]">
-            6 · Assumptions & limitations
+            {num()} · Assumptions & limitations
           </h3>
           <p className="mt-1 text-sm text-[var(--warn-text)]">{a.assumptions}</p>
         </div>
         {a.sources && a.sources.length > 0 ? (
           <div className="rounded-xl border border-[var(--accent)]/25 bg-[var(--surface-soft)] px-3 py-2.5">
             <h3 className="text-xs font-extrabold uppercase tracking-wide text-[var(--accent)]">
-              7 · What the AI used — sources {a.language === "hinglish" ? "· Hinglish answer" : ""}
+              {num()} · What the AI used — sources {a.language === "hinglish" ? "· Hinglish answer" : ""}
             </h3>
             <p className="mt-0.5 text-xs text-[var(--dim)]">
               Ye exact figures aur dates hain jo is answer ko banane mein use hue — server par
@@ -212,7 +217,8 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
         </button>
       </div>
     </article>
-  );
+    );
+  };
 
   return (
     <div className="page-anim space-y-6">
