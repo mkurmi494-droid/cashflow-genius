@@ -4534,6 +4534,41 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
     },
   }),
 
+  deleteConversation: defineAction({
+    description:
+      "Deletes one AI CFO conversation and all of its messages, in the signed-in account's active workspace. The client asks for confirmation first; there is no undo for a deleted conversation.",
+    request: z.object({ token: z.string().max(200).optional(), conversationId: z.string() }),
+    response: z.object({ ok: z.literal(true) }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const rows = await db
+        .select()
+        .from(schema.aiConversations)
+        .where(
+          and(
+            eq(schema.aiConversations.id, args.conversationId),
+            and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode)),
+          ),
+        )
+        .limit(1);
+      if (!rows[0]) throw new Error("Conversation not found.");
+      await db.delete(schema.aiMessages).where(eq(schema.aiMessages.conversationId, args.conversationId));
+      await db
+        .delete(schema.aiConversations)
+        .where(
+          and(
+            eq(schema.aiConversations.id, args.conversationId),
+            and(eq(schema.aiConversations.ownerId, user.id), eq(schema.aiConversations.mode, wsMode)),
+          ),
+        );
+      await log(db, "AI CFO conversation deleted", rows[0].title, user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true as const };
+    },
+  }),
+
   restoreDeletedItem: defineAction({
     description:
       "Undoes a delete: re-inserts the exact record(s) snapshotted into trash_items when something was deleted (same ids, same workspace, linked rows included — invoice items, EMI instalments, savings transfers, note versions). The snapshot is consumed on restore; records whose id already exists again are skipped, so restoring twice or after a re-create never duplicates or overwrites.",
