@@ -18,6 +18,13 @@
 //  (g) tolerant parsing — reasoning-only replies, JSON in markdown
 //      fences, JSON wrapped in prose, JSON nested under an "answer"
 //      key, and plain free text (used as the answer) all work;
+//  (l) a reasoning TRACE (the model thinking out loud about producing
+//      JSON, never producing an answer) is rejected and the next free
+//      model is tried — it is never shown as the answer — while a
+//      genuine plain-text answer is still shown;
+//  (m) a stored conversation whose answer is truncated JSON-in-JSON
+//      (cut off by the old 4000-character free-text cap) still renders
+//      as a clean structured card with its numbers grid on re-open;
 //  (h) an unusable reply on model 1 tries model 2 (vision shape,
 //      where free text cannot fill the structured fields);
 //  (i) vision calls never send image parts to the text-only model
@@ -710,6 +717,207 @@ mockHandler = () =>
     assert.ok(!shown.includes("direct_answer"));
     assert.ok(!shown.includes("{"));
     assert.equal(displayRawText("plain prose, no JSON"), "plain prose, no JSON");
+  });
+}
+
+// (g5) a reasoning trace is NOT an answer — the model thinking out
+//      loud about producing JSON must be rejected and the next free
+//      model tried, never shown as the direct answer. Live case:
+//      Ernie answered "Mera cash kaisa chal raha hai?" with its own
+//      planning ("We need answer user's request. Need produce final
+//      only valid JSON...") and no actual answer.
+const reasoningTrace =
+  "We need answer user's request. Need produce final only valid JSON matching requested shape. " +
+  "Need infer shape? User says Structure reply as: direct answer, key numbers relied on (label + formatted value), " +
+  "plain explanation, supporting data points quoted from figures above, suggested options, assumptions and limitations. " +
+  "Respond with ONLY valid JSON matching requested shape. No markdown. " +
+  "Need likely JSON object with fields: direct_answer, key_numbers, explanation, supporting_data_points, suggested_options, assumptions_and_limitations. " +
+  "Need Hinglish prose for every field? Field labels stay as they are; only prose is Hinglish. " +
+  "Need answer question: Mera cash kaisa chal raha hai? Use figures. " +
+  "Need check revenue INR 3,540 and expenses INR 100. Need compute net profit.";
+resetMock();
+mockHandler = (url, init) => {
+  const body = JSON.parse(init.body);
+  if (body.model === "baidu/ernie-5.5-flash-preview:free") {
+    return jsonResponse(200, openRouterOk(reasoningTrace));
+  }
+  return jsonResponse(200, openRouterOk(JSON.stringify(cannedCfo)));
+};
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "baidu/ernie-5.5-flash-preview:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("reasoning trace on model 1 → structured answer from model 2, trace never shown", () => {
+    assert.equal(requests.length, 2);
+    assert.equal(JSON.parse(requests[0].init.body).model, "baidu/ernie-5.5-flash-preview:free");
+    assert.equal(JSON.parse(requests[1].init.body).model, "google/gemma-4-31b-it:free");
+    assert.equal(res.directAnswer, cannedCfo.directAnswer);
+    assert.ok(!res.directAnswer.includes("We need"));
+    assert.ok(!res.directAnswer.includes("Need produce"));
+  });
+}
+resetMock();
+mockHandler = () => jsonResponse(200, openRouterOk(reasoningTrace));
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "baidu/ernie-5.5-flash-preview:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("reasoning trace on every model → honest fallback, never the trace", () => {
+    assert.equal(requests.length, OPENROUTER_FREE_MODELS.length);
+    assert.ok(res.directAnswer.includes("OpenRouter"));
+    assert.ok(res.directAnswer.includes("not an AI analysis"));
+    assert.ok(!res.directAnswer.includes("We need"));
+  });
+}
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(
+      "Aapka cashflow strong hai. Revenue INR 3,540 aayi hai, kharcha sirf INR 100 hua. " +
+        "Aapko aane wale mahine mein bhi isi tarah kharch par nazar rakhni chahiye.",
+    ),
+  );
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("genuine plain-text answer is still shown (advice with 'need' mid-sentence is not a trace)", () => {
+    assert.equal(requests.length, 1);
+    assert.ok(res.directAnswer.startsWith("Aapka cashflow strong hai"));
+    assert.ok(!res.directAnswer.includes("could not reach"));
+  });
+}
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(`${reasoningTrace}\n\n${JSON.stringify(cannedCfo)}`),
+  );
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("trace wrapped around a valid JSON object still yields the JSON answer", () => {
+    assert.equal(requests.length, 1);
+    assert.equal(res.directAnswer, cannedCfo.directAnswer);
+    assert.equal(res.numbers[0].value, "₹3,440");
+  });
+}
+
+// (g6) the exact stored shape of the first live "Bilkul sahi"
+//      conversation: the model's JSON reply was embedded raw inside
+//      directAnswer and cut off mid-string by the old 4000-character
+//      free-text cap, so the stored row holds truncated JSON. Re-opening
+//      it must still render a clean structured card — prose plus the
+//      numbers grid — never raw JSON and never just the question.
+{
+  const innerDirect =
+    "Bilkul sahi — is mahine aapka cashflow strong hai. Revenue INR 3,540 aayi hai aur kharcha sirf INR 100 hua hai, " +
+    "toh net profit INR 3,440 bana hai. Aapke paas abhi available cash bhi INR 3,440 hai (opening balance INR 0 tha, " +
+    "matlab poora paisa isi mahine ka hai). Pichhle mahine revenue INR 0 aur expenses INR 0 the, isliye yeh pehla asli " +
+    "cash-generating month lag raha hai. Agle 30 days mein na kuch dena hai (INR 0) na lena hai (INR 0), toh projected " +
+    "cash INR 3,440 hi rahegi. Ek baat dhyan mein rakhein: last 3 months ka average monthly net INR 0 dikha raha hai, " +
+    "kyunki record mein sirf ek hi mahine ka data hai — yeh trend abhi establish nahi hui hai.";
+  const innerReply = JSON.stringify(
+    {
+      direct_answer: innerDirect,
+      key_numbers: [
+        { label: "Opening balance", value: "INR 0" },
+        { label: "Available cash", value: "INR 3,440" },
+        { label: "Total revenue (posted income)", value: "INR 3,540" },
+        { label: "Total expenses (posted)", value: "INR 100" },
+        { label: "Net profit", value: "INR 3,440" },
+      ],
+      explanation:
+        "Cashflow strong hai kyunki revenue expenses se bahut zyada hai, aur aane wale 30 days mein koi due nahi hai.",
+      supporting_data: ["Available cash INR 3,440 = opening INR 0 + income INR 3,540 − expenses INR 100"],
+      suggested_options: [
+        "Agle 30 days mein kuch bhi due nahi hai — agar aapko koi aane wala bill ya payment pata hai, uski date set kar dein, taaki projected cash sahi bane. ".repeat(20),
+        "Ek chhota sa monthly budget set kar dein taaki kharcha track ho sake.",
+      ],
+      assumptions: "Figures code se calculate kiye gaye hain; koi number invent nahi kiya gaya.",
+    },
+    null,
+    2,
+  );
+  // The old free-text path stored text.slice(0, 4000): the JSON is cut
+  // off mid-string inside suggested_options, exactly like the live row.
+  const truncated = innerReply.slice(0, 4000);
+  assert.ok(truncated.length === 4000);
+  assert.ok(!truncated.trimEnd().endsWith("}"));
+  const storedTruncated = JSON.stringify({
+    directAnswer: truncated,
+    numbers: [],
+    explanation:
+      "The model answered as free text rather than the usual structured JSON, so the key numbers could not be separated out — the direct answer above carries the full reply.",
+    supportingData: [],
+    options: [],
+    assumptions: "Answered by baidu/ernie-5.5-flash-preview:free as free text.",
+    sources: ["Available cash INR 3,440 = opening 0 + income INR 3,540 − expenses INR 100"],
+    language: "hinglish",
+  });
+  check("stored truncated JSON-in-JSON renders as a clean structured card", () => {
+    const a = parseStoredAnswer(storedTruncated);
+    assert.ok(a);
+    assert.ok(a.directAnswer.startsWith("Bilkul sahi"));
+    assert.ok(!a.directAnswer.includes("direct_answer"));
+    assert.ok(!a.directAnswer.includes("{"));
+    assert.equal(a.numbers.length, 5);
+    assert.deepEqual(a.numbers[1], { label: "Available cash", value: "INR 3,440" });
+    assert.deepEqual(a.numbers[4], { label: "Net profit", value: "INR 3,440" });
+    assert.equal(a.language, "hinglish");
+    assert.equal(a.sources.length, 1);
+  });
+  check("truncated stored conversation pairs from history in both row orders", () => {
+    for (const msgs of [
+      [
+        { role: "user", content: "mera cashflow is mahine kaisa hai?" },
+        { role: "assistant", content: storedTruncated },
+      ],
+      [
+        { role: "assistant", content: storedTruncated },
+        { role: "user", content: "mera cashflow is mahine kaisa hai?" },
+      ],
+    ]) {
+      const turns = buildTurns(msgs);
+      assert.equal(turns.length, 1);
+      assert.ok(turns[0].a);
+      assert.ok(turns[0].a.directAnswer.startsWith("Bilkul sahi"));
+      assert.equal(turns[0].a.numbers.length, 5);
+    }
   });
 }
 
