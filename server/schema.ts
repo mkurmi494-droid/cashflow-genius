@@ -362,11 +362,13 @@ export const userWorkspaceState = pgTable("user_workspace_state", {
   // "Not connected" until a Gemini call is actually wired and verified.
   geminiApiKey: text("gemini_api_key"),
   // Which AI engine answers the AI CFO: "gemini" (default — Google AI
-  // Studio key, gemini-3.8-flash) or "openrouter" (OpenRouter key, any
-  // model id, defaulting to a free :free model). Per ACCOUNT, like the
-  // cursor style. Switching provider never touches records — only
-  // which engine the CFO calls — and it clears the verified flag
-  // below, so the new provider must prove itself with a real call.
+  // Studio key, gemini-3.8-flash), "openrouter" (OpenRouter key, any
+  // model id, defaulting to a free :free model) or "openai" (the
+  // account's own OpenAI key, ChatGPT — default gpt-4o-mini, billed to
+  // the key owner's OpenAI account). Per ACCOUNT, like the cursor
+  // style. Switching provider never touches records — only which
+  // engine the CFO calls — and it clears the verified flag below, so
+  // the new provider must prove itself with a real call.
   aiProvider: text("ai_provider").notNull().default("gemini"),
   // The account's own OpenRouter API key, IF they choose to save one
   // in Settings. Same server-side-only rule as geminiApiKey: never
@@ -381,6 +383,18 @@ export const userWorkspaceState = pgTable("user_workspace_state", {
   openRouterModel: text("openrouter_model")
     .notNull()
     .default("google/gemma-4-31b-it:free"),
+  // The account's own OpenAI API key, IF they choose to save one in
+  // Settings for ChatGPT answers. Same server-side-only rule as the
+  // other keys: never returned to the browser, only saved + last 4
+  // characters. OpenAI usage is billed to the account that owns the
+  // key — there is no free tier. Use a FRESH key (platform.openai.com
+  // → API keys): never reuse a key that was pasted in chat — a pasted
+  // key is exposed and must be revoked.
+  openAiApiKey: text("openai_api_key"),
+  // The OpenAI model id used when OpenAI is the provider. Default
+  // gpt-4o-mini (cheap, fast, vision-capable, JSON mode); the user
+  // can change this in Settings — e.g. gpt-4o for stronger answers.
+  openAiModel: text("openai_model").notNull().default("gpt-4o-mini"),
   // When a real AI call last succeeded, and with which provider. The
   // Live connections probe shows an engine "Live" only when this flag
   // names the currently selected provider — a saved key alone is never
