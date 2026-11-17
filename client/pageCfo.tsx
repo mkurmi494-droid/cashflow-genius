@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
+import { buildTurns, displayRawText } from "./cfoHistory";
 import { addDays, buildCalendarEvents, fmtMoney, prettyDate, summarise, todayStr, totalSavedCents } from "./lib";
 import type { PageProps } from "./types";
 import { Badge, GlassOrb, SectionTitle } from "./components";
@@ -29,16 +30,6 @@ const SUGGESTED_HI = [
   "Mera paisa kahan leak ho raha hai?",
   "Kya meri savings sahi speed par hai?",
 ];
-
-function parseAnswer(content: string): CfoAnswer | null {
-  try {
-    const parsed = JSON.parse(content) as CfoAnswer;
-    if (typeof parsed.directAnswer === "string") return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
   const cur = state.business.currency;
@@ -95,22 +86,14 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
     ask.mutate(trimmed);
   };
 
-  const storedTurns: { q: string; a: CfoAnswer | null; raw?: string }[] = [];
-  if (active) {
-    const msgs = active.messages;
-    for (let i = 0; i < msgs.length; i++) {
-      const m = msgs[i]!;
-      if (m.role === "user") {
-        const next = msgs[i + 1];
-        storedTurns.push({
-          q: m.content,
-          a: next && next.role === "assistant" ? parseAnswer(next.content) : null,
-          raw: next?.content,
-        });
-        if (next) i++;
-      }
-    }
-  }
+  // Turns from the stored conversation. buildTurns pairs messages by
+  // role, not position: the two rows of one turn share a created_at,
+  // so ordering can tie and return the assistant row before its
+  // question — the answer must still render. Stored free-text answers
+  // (raw model JSON inside directAnswer) are unwrapped into structured
+  // fields by parseStoredAnswer, exactly like structured answers.
+  const storedTurns: { q: string; a: CfoAnswer | null; raw?: string }[] =
+    active ? buildTurns(active.messages) : [];
   // Turns asked in this session but not yet reflected in the refetched state.
   const pendingLocal = activeId
     ? localTurns.slice(storedTurns.length)
@@ -466,7 +449,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
                 <article key={i} className="card p-4">
                   <p className="text-sm font-bold">You asked</p>
                   <p className="text-sm">{t.q}</p>
-                  <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--dim)]">{t.raw ?? ""}</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--dim)]">{displayRawText(t.raw ?? "")}</p>
                 </article>
               ),
             )}
