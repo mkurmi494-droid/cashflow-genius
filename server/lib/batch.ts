@@ -145,6 +145,11 @@ export async function loadWorkspacePrelude(
       (select row_to_json(s) from (
         select owner_id as "ownerId", active_mode as "activeMode",
                cursor_style as "cursorStyle", gemini_api_key as "geminiApiKey",
+               ai_provider as "aiProvider",
+               openrouter_api_key as "openRouterApiKey",
+               openrouter_model as "openRouterModel",
+               ai_verified_at at time zone 'UTC' as "aiVerifiedAt",
+               ai_verified_provider as "aiVerifiedProvider",
                tour_dismissed as "tourDismissed"
         from user_workspace_state where owner_id = ${ownerId}
       ) s) as state,
@@ -421,6 +426,11 @@ export async function loadCombinedBatch(
       (select row_to_json(s) from (
         select owner_id as "ownerId", active_mode as "activeMode",
                cursor_style as "cursorStyle", gemini_api_key as "geminiApiKey",
+               ai_provider as "aiProvider",
+               openrouter_api_key as "openRouterApiKey",
+               openrouter_model as "openRouterModel",
+               ai_verified_at at time zone 'UTC' as "aiVerifiedAt",
+               ai_verified_provider as "aiVerifiedProvider",
                tour_dismissed as "tourDismissed"
         from user_workspace_state where owner_id = ${ownerId}
       ) s) as state,
