@@ -115,13 +115,12 @@ function asCursorStyle(v: string | null | undefined): CursorStyleT {
     : "blue";
 }
 
-/** The account's user_workspace_state row (active mode + cursor style
- *  + saved AI keys/provider), creating it on first use. getState's
- *  prelude already ensures the row exists via activeMode, so in the
- *  normal path this is exactly one select. The per-setting readers
- *  used to call activeMode() first and then select this same row
- *  again — two sequential round-trips each, hidden inside getState's
- *  "parallel" batch. */
+/** The account's user_workspace_state row (active mode + cursor style),
+ *  creating it on first use. getState's prelude already ensures the row
+ *  exists via activeMode, so in the normal path this is exactly one
+ *  select. The per-setting readers used to call activeMode() first and
+ *  then select this same row again — two sequential round-trips each,
+ *  hidden inside getState's "parallel" batch. */
 async function workspaceStateRow(db: Db, ownerId: string) {
   const rows = await db
     .select()
@@ -4916,7 +4915,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   getIntegrationStatus: defineAction({
     description:
-      "Reports the live connection status of each integration, verified server-side at call time: the workspace database is probed with a real read of the signed-in account's business row, and Supabase / Google sign-in are probed against the connected Supabase project's real Auth settings — Google sign-in shows Live only when Supabase itself reports the Google provider enabled. An AI engine (Gemini or OpenRouter, whichever the account selected in Settings) shows Live only when a real AI call with that provider has actually succeeded — recorded on the account row by the call itself; a saved key alone is never shown as live. Bank/UPI sync has no connection wired, so it is honestly reported as not connected, with what is needed to connect it.",
+      "Reports the live connection status of each integration, verified server-side at call time: the workspace database is probed with a real read of the signed-in account's business row, and Supabase / Google sign-in are probed against the connected Supabase project's real Auth settings — Google sign-in shows Live only when Supabase itself reports the Google provider enabled. The AI engine (ChatGPT / OpenAI, one shared server key for every account) shows Live only when a real OpenAI call has actually succeeded for that account — recorded on the account row by the call itself. Bank/UPI sync has no connection wired, so it is honestly reported as not connected.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       checkedAt: z.string(),
