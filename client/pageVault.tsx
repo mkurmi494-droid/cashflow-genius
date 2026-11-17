@@ -553,6 +553,59 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
   });
 
+  // ---- AI provider (Gemini / OpenRouter) + OpenRouter key/model ----
+  // Mirrors the Gemini key block above: keys are stored server-side
+  // only and never shown back; switching provider/key/model clears the
+  // verified flag, so Live connections only shows Live after a real
+  // call with the new configuration succeeds.
+  const [orKeyInput, setOrKeyInput] = useState("");
+  const [orModelInput, setOrModelInput] = useState(state.openRouterModel ?? "");
+  const setProvider = useMutation({
+    mutationFn: (p: "gemini" | "openrouter") => api.setAiProvider({ provider: p }),
+    onSuccess: (res) => {
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify(
+        res.provider === "openrouter"
+          ? "AI provider switched to OpenRouter. Save a free OpenRouter key below to enable AI answers — the free :free models cost nothing, capped at 50 requests a day."
+          : "AI provider switched to Gemini.",
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const saveOpenRouterKey = useMutation({
+    mutationFn: () => api.saveOpenRouterKey({ apiKey: orKeyInput.trim() }),
+    onSuccess: (res) => {
+      setOrKeyInput("");
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify(
+        `OpenRouter API key saved securely on the server (ending ••••${res.last4}). Honest status: OpenRouter is still Not connected — the AI CFO keeps answering with the rule-based fallback until a real OpenRouter call succeeds.`,
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const removeOpenRouterKey = useMutation({
+    mutationFn: () => api.removeOpenRouterKey({}),
+    onSuccess: () => {
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify("Your saved OpenRouter API key was removed from the server.");
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const saveOpenRouterModel = useMutation({
+    mutationFn: () => api.setOpenRouterModel({ model: orModelInput.trim() }),
+    onSuccess: (res) => {
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify(
+        `OpenRouter model set to ${res.model}. It will show Live only after a real call with this model succeeds.`,
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+
   const save = useMutation({
     mutationFn: () =>
       api.updateBusiness({
@@ -1201,6 +1254,56 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         <WhyCashflowGenius />
       </section>
 
+      <section className="card p-5" aria-label="AI provider">
+        <SectionTitle
+          title="AI provider"
+          hint="Which engine answers the AI CFO"
+        />
+        <p className="text-sm leading-relaxed text-[var(--dim)]">
+          The AI CFO can run on <strong className="text-[var(--text)]">Gemini</strong> (Google AI
+          Studio key, gemini-3.8-flash) or on{" "}
+          <strong className="text-[var(--text)]">OpenRouter</strong> (any model — free{" "}
+          <code>:free</code> models cost nothing, capped at 50 requests a day). Gemini is the
+          default. Google currently blocks the free tier for some accounts (HTTP 403 “free tier
+          is not available for this project”) — if Gemini keeps failing, switch to OpenRouter.
+          Switching never touches your records; it only changes which engine is called, and it
+          clears the verified status, so the new provider must prove itself with a real call
+          before Live connections shows it Live.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="AI provider">
+          {(
+            [
+              { key: "gemini", label: "Gemini" },
+              { key: "openrouter", label: "OpenRouter (free models)" },
+            ] as const
+          ).map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              aria-pressed={state.aiProvider === o.key}
+              disabled={setProvider.isPending}
+              onClick={() => {
+                if (state.aiProvider !== o.key) setProvider.mutate(o.key);
+              }}
+              className={`rounded-full px-3.5 py-2 text-xs font-extrabold transition ${
+                state.aiProvider === o.key
+                  ? "bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(124,58,237,0.28)]"
+                  : "bg-white text-[var(--dim)] shadow-[inset_0_0_0_1px_var(--border)]"
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-[var(--dim)]">
+          Current engine:{" "}
+          {state.aiProvider === "openrouter"
+            ? `OpenRouter — model ${state.openRouterModel}`
+            : "Gemini — gemini-3.8-flash"}
+          .
+        </p>
+      </section>
+
       <section className="card p-5" aria-label="Gemini API key">
         <SectionTitle
           title="Gemini API key"
@@ -1260,6 +1363,97 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         <p className="mt-2 text-xs leading-relaxed text-[var(--dim)]">
           Key kahan se milegi: Google AI Studio (aistudio.google.com) → “Get API key”. Yahan
           paste karo — chat mein kabhi mat bhejo.
+        </p>
+      </section>
+
+      <section className="card p-5" aria-label="OpenRouter API key">
+        <SectionTitle
+          title="OpenRouter API key"
+          hint="Optional — free :free models, no payment needed"
+        />
+        <p className="text-sm leading-relaxed text-[var(--dim)]">
+          Agar tumhare paas openrouter.ai ki API key hai, to yahan save kar sakte ho. Key{" "}
+          <strong className="text-[var(--text)]">sirf server par store hoti hai</strong> — browser ko kabhi wapas
+          nahi bheji jati, yahan dobara dikhayi nahi jati, aur chat mein paste karne ki zaroorat
+          nahi hai. Free <code>:free</code> models cost nothing and are capped at 50 requests a
+          day; the free model list changes over time, so if a model stops working, pick another{" "}
+          <code>:free</code> model below. Some free-model hosts may use prompts for training —
+          the CFO only ever sends calculated figures from your records. A paid model id such as{" "}
+          <code>openai/gpt-4o-mini</code> works through the same endpoint when your OpenRouter
+          account has credits.
+        </p>
+        <p className="mt-2 text-sm font-semibold" role="status">
+          {state.openRouterKeySaved
+            ? `A key is saved for your account (ending ••••${state.openRouterKeyLast4}). OpenRouter status: Not connected — saved for a future connection.`
+            : "No OpenRouter API key saved for your account yet. OpenRouter status: Not connected."}
+        </p>
+        <form
+          className="mt-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (orKeyInput.trim().length >= 20) saveOpenRouterKey.mutate();
+          }}
+        >
+          <label className="block flex-1">
+            <span className="sr-only">OpenRouter API key from openrouter.ai</span>
+            <input
+              className="field"
+              type="password"
+              value={orKeyInput}
+              onChange={(e) => setOrKeyInput(e.target.value)}
+              aria-label="OpenRouter API key from openrouter.ai"
+              placeholder="Paste your OpenRouter API key (from openrouter.ai)"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            className="btn-primary px-5 py-2.5 text-sm"
+            disabled={saveOpenRouterKey.isPending || orKeyInput.trim().length < 20}
+          >
+            {saveOpenRouterKey.isPending ? "Saving…" : state.openRouterKeySaved ? "Replace saved key" : "Save key securely"}
+          </button>
+          {state.openRouterKeySaved ? (
+            <button
+              type="button"
+              className="btn-ghost px-5 py-2.5 text-sm text-[var(--err-text)]"
+              disabled={removeOpenRouterKey.isPending}
+              onClick={() => removeOpenRouterKey.mutate()}
+            >
+              Remove key
+            </button>
+          ) : null}
+        </form>
+        <form
+          className="mt-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (orModelInput.trim().length >= 3) saveOpenRouterModel.mutate();
+          }}
+        >
+          <label className="block flex-1">
+            <span className="sr-only">OpenRouter model id</span>
+            <input
+              className="field"
+              value={orModelInput}
+              onChange={(e) => setOrModelInput(e.target.value)}
+              aria-label="OpenRouter model id"
+              placeholder="google/gemma-4-31b-it:free"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            className="btn-primary px-5 py-2.5 text-sm"
+            disabled={saveOpenRouterModel.isPending || orModelInput.trim().length < 3}
+          >
+            {saveOpenRouterModel.isPending ? "Saving…" : "Save model"}
+          </button>
+        </form>
+        <p className="mt-2 text-xs leading-relaxed text-[var(--dim)]">
+          Key kahan se milegi: openrouter.ai → Keys → Create Key (free models ke liye payment
+          nahi chahiye). Yahan paste karo — chat mein kabhi mat bhejo, aur jo key kabhi chat
+          mein aa gayi ho use dobara use mat karo; hamesha fresh key banao.
         </p>
       </section>
 
@@ -1387,9 +1581,11 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           <li>
             <strong className="text-[var(--text)]">AI CFO:</strong> the brief asks for
             Gemini through a Supabase Edge Function with GEMINI_API_KEY in server
-            secrets. No Gemini key is configured in this runtime, so answers are
-            generated by the runtime's server-side AI, fed only with figures calculated
-            from your records. The app never claims a Gemini connection it does not
+            secrets. You can pick the engine in Settings — Gemini (Google AI Studio
+            key) or OpenRouter (free :free models, or a paid model when the account
+            has credits). Without a working key for the selected provider, answers
+            come from the honest rule-based fallback, fed only with figures calculated
+            from your records. The app never claims an AI connection it does not
             have, and no key is ever exposed to the browser.
           </li>
           <li>
