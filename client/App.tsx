@@ -771,6 +771,28 @@ export function App() {
   //   instead of the pages (see the render branch below). The gate
   //   clears as soon as the refetch lands with the new mode's data.
   const [switchingTo, setSwitchingTo] = useState<AppMode | null>(null);
+  // Workspace switcher dropdown (header bar): open state + a ref for
+  // closing on an outside tap, and Escape. Switching itself still goes
+  // through requestModeSwitch, which asks first.
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const wsMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!wsMenuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (wsMenuRef.current && !wsMenuRef.current.contains(e.target as Node)) {
+        setWsMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWsMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown, { passive: true });
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [wsMenuOpen]);
   useEffect(() => {
     const onMutated = (e: Event) => {
       const detail = (e as CustomEvent<MutationDetail>).detail;
@@ -1683,26 +1705,47 @@ export function App() {
           <span className="w-full text-[11px] font-extrabold uppercase tracking-wide text-[var(--dim)] sm:w-auto">
             Your workspace — switch anytime, both stay saved:
           </span>
-          <div className="grid w-full grid-cols-2 gap-1.5 sm:flex sm:w-auto sm:flex-1 sm:flex-wrap" role="group" aria-label="Switch workspace in one tap">
-            {APP_MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={m === appMode}
-                disabled={modeMut.isPending}
-                onClick={() => {
-                  if (m !== appMode) void requestModeSwitch(m);
-                }}
-                className={`rounded-full px-3 py-2 text-xs font-bold transition ${
-                  m === appMode
-                    ? "bg-[var(--accent)] text-white shadow-[0_6px_16px_rgba(124,58,237,0.24)]"
-                    : "bg-[var(--surface-soft)] text-[var(--dim)] hover:text-[var(--text)]"
-                }`}
+          <div className="relative" ref={wsMenuRef}>
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={wsMenuOpen}
+              disabled={modeMut.isPending}
+              onClick={() => setWsMenuOpen((o) => !o)}
+              className="rounded-full bg-[var(--accent)] px-3 py-2 text-xs font-bold text-white shadow-[0_6px_16px_rgba(124,58,237,0.24)] transition"
+            >
+              {MODE_ICONS[appMode]} {MODE_LABELS[appMode]} {wsMenuOpen ? "▴" : "▾"}
+            </button>
+            {wsMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="Switch workspace"
+                className="absolute left-0 top-full z-50 mt-1.5 w-64 overflow-hidden rounded-2xl border border-[var(--border)] bg-white shadow-[0_16px_40px_rgba(76,29,149,0.18)]"
               >
-                {MODE_ICONS[m]} {MODE_LABELS[m]}
-                {m === appMode ? " · open" : ""}
-              </button>
-            ))}
+                {APP_MODES.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="menuitem"
+                    aria-current={m === appMode}
+                    onClick={() => {
+                      setWsMenuOpen(false);
+                      if (m !== appMode) void requestModeSwitch(m);
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left text-sm font-bold transition ${
+                      m === appMode
+                        ? "bg-[var(--surface-soft)] text-[var(--accent)]"
+                        : "text-[var(--text)] hover:bg-[var(--surface-soft)]"
+                    }`}
+                  >
+                    <span>
+                      {MODE_ICONS[m]} {MODE_LABELS[m]}
+                    </span>
+                    {m === appMode ? <span className="text-xs">· open</span> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <button
             type="button"
@@ -1872,8 +1915,8 @@ export function App() {
                   key={n.route}
                   type="button"
                   onClick={() => go(n.route)}
-                  className={`rounded-2xl px-3 py-3 text-left text-sm font-bold ${
-                    route === n.route ? "bg-[var(--surface-soft)] text-[var(--accent)]" : "hover:bg-[var(--surface-soft)]"
+                  className={`rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold ${
+                    route === n.route ? "text-[var(--accent)] ring-1 ring-[var(--accent)]/40" : ""
                   } ${personal && n.group === "business" ? "opacity-70" : ""}`}
                 >
                   <span aria-hidden className="mr-2">{n.icon}</span>
@@ -1888,7 +1931,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => go("settings")}
-                className="rounded-2xl px-3 py-3 text-left text-sm font-bold hover:bg-[var(--surface-soft)]"
+                className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold"
               >
                 <span aria-hidden className="mr-2">⚙</span>
                 Settings
@@ -1899,7 +1942,7 @@ export function App() {
                   setMoreOpen(false);
                   void logout();
                 }}
-                className="rounded-2xl px-3 py-3 text-left text-sm font-bold hover:bg-[var(--surface-soft)]"
+                className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold"
               >
                 <span aria-hidden className="mr-2">⎋</span>
                 Log out
