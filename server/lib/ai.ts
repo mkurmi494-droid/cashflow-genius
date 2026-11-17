@@ -138,7 +138,16 @@ async function callGemini(
       signal: ctrl.signal,
     });
     if (!res.ok) {
-      throw new Error(`Gemini answered ${res.status}`);
+      // Capture the error body (bounded, never the key) so the server log
+      // shows WHY Gemini refused — e.g. free tier unavailable for the
+      // project vs. API not enabled — instead of just the status code.
+      let detail = "";
+      try {
+        detail = (await res.text()).slice(0, 500);
+      } catch {
+        detail = "";
+      }
+      throw new Error(`Gemini answered ${res.status}${detail ? `: ${detail}` : ""}`);
     }
     const data = (await res.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
