@@ -513,21 +513,21 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
               </button>
               <button
                 type="button"
-                className="chip-glass rounded-full px-4 py-3 text-sm font-bold text-[#fbf7ea] transition hover:bg-[rgba(255,253,248,0.22)] active:scale-[0.97]"
+                className="rounded-full bg-white px-4 py-3 text-sm font-extrabold text-[var(--accent-deep)] shadow-[0_10px_24px_rgba(76,29,149,0.3)] transition hover:brightness-105 active:scale-[0.97]"
                 onClick={() => go("savings")}
               >
                 🪙 Add to savings
               </button>
               <button
                 type="button"
-                className="chip-glass rounded-full px-4 py-3 text-sm font-bold text-[#fbf7ea] transition hover:bg-[rgba(255,253,248,0.22)] active:scale-[0.97]"
+                className="rounded-full bg-white px-4 py-3 text-sm font-extrabold text-[var(--accent-deep)] shadow-[0_10px_24px_rgba(76,29,149,0.3)] transition hover:brightness-105 active:scale-[0.97]"
                 onClick={() => go("payment-calendar")}
               >
                 🗓 What&rsquo;s due
               </button>
               <button
                 type="button"
-                className="chip-glass rounded-full px-4 py-3 text-sm font-bold text-[#fbf7ea] transition hover:bg-[rgba(255,253,248,0.22)] active:scale-[0.97]"
+                className="rounded-full bg-white px-4 py-3 text-sm font-extrabold text-[var(--accent-deep)] shadow-[0_10px_24px_rgba(76,29,149,0.3)] transition hover:brightness-105 active:scale-[0.97]"
                 onClick={() => go("ai-cfo")}
               >
                 ✦ Ask the AI CFO
