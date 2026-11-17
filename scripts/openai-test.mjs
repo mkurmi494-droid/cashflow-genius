@@ -280,6 +280,37 @@ mockHandler = () =>
     assert.equal(res.directAnswer, cannedCfo.directAnswer);
   });
 }
+// Live regression 2026-11-17: gpt-4o-mini answered three real questions
+// but named the answer field "answer" instead of "direct_answer", with
+// key_numbers as a map of INR strings — all three were thrown away to
+// the rule-based fallback with { code: 'parse' }. The answer must survive.
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openAiOk(
+      JSON.stringify({
+        answer: "Yes, everything is fine.",
+        key_numbers: {
+          available_cash: "INR 2,00,00,000",
+          total_revenue: "INR 44,74,94,859",
+        },
+        explanation: "Your cash covers your dues.",
+        supporting_data: ["Cash INR 2,00,00,000"],
+        suggested_options: ["Check the dashboard."],
+        assumptions_and_limitations: "Answered by gpt-4o-mini.",
+      }),
+    ),
+  );
+{
+  const res = await aiComplete("r u okay", { schema: cfoSchema }, openAiSettings);
+  resultsDump.push(JSON.stringify(res));
+  check("answer field named 'answer' + key_numbers map still parses", () => {
+    assert.equal(res.directAnswer, "Yes, everything is fine.");
+    assert.equal(res.numbers[0].label, "availableCash");
+    assert.equal(res.numbers[0].value, "INR 2,00,00,000");
+  });
+}
 
 // (g) aiExtrasFromRow maps the OpenAI fields
 {
