@@ -1,29 +1,14 @@
 // AI CFO engine for the Vercel port — replaces ctx.inference.
 //
-// Three providers, chosen per account in Settings (default: Gemini):
-//  - Gemini (Google AI Studio key, gemini-3.8-flash, free tier) — the
-//    account's own saved key first, then the server GEMINI_API_KEY.
-//  - OpenRouter (OpenRouter key, any model id — default a free :free
-//    model) via its OpenAI-compatible chat-completions endpoint — the
-//    account's own saved key first, then OPENROUTER_API_KEY. Gemini's
-//    free tier is blocked for the user's Google account (HTTP 403
-//    "free tier is not available for this project" on every project,
-//    2-Step Verification already on), so OpenRouter's free models are
-//    the working free engine; a paid model id such as
-//    openai/gpt-4o-mini works through the same code path when the
-//    account has credits. Free-model pools throttle (HTTP 429), so a
-//    failed call automatically tries the next verified-free model in
-//    OPENROUTER_FREE_MODELS, and replies are parsed tolerantly
-//    (fences, prose-wrapped JSON, reasoning-only answers) because
-//    reasoning-mandatory free models do not always return clean JSON.
-//  - OpenAI (ChatGPT) — the account's own OpenAI key, direct
-//    api.openai.com chat-completions endpoint, default gpt-4o-mini.
-//    No free tier: usage is billed to the key owner's OpenAI account.
-//    One model, one attempt — the paid API is reliable, so no
-//    fallback chain; any failure falls back honestly, exactly like
-//    Gemini. The key is stored server-side only and is never logged
-//    or returned; use a FRESH key, never one pasted in chat.
-//    One shape is never shown, though: a reasoning trace — the model
+// ONE engine for everyone: ChatGPT (OpenAI) with the server key.
+// There is no per-account provider choice and no per-account key
+// any more (Settings no longer offers them) — one shared OpenAI key
+// in Vercel (OPENAI_API_KEY) answers every account's CFO, briefing
+// and Scam Shield vision check. The key is read from the server
+// environment only; an account key saved earlier is still honoured
+// as a fallback, but no new one can be saved. Replies are parsed
+// tolerantly (fences, prose-wrapped JSON, reasoning-only answers).
+// One shape is never shown, though: a reasoning trace — the model
 //    thinking out loud about producing JSON ("We need answer user's
 //    request. Need produce final only valid JSON...") without ever
 //    producing an answer. That is rejected and the next free model is
@@ -38,14 +23,14 @@
 //    the chain. Ernie answers last: it is reasoning-mandatory, slow
 //    and trace-prone, so the clean models go first.
 //
-// Without any key for the selected provider, or whenever the provider
-// call fails, answers come from an honest rule-based fallback built
-// from the figures already computed by the action (never invented
-// numbers), and the fallback says so in the answer itself. No key is
-// ever logged or returned to the browser. A successful provider call
+// Without the server key, or whenever the OpenAI call fails,
+// answers come from an honest rule-based fallback built from the
+// figures already computed by the action (never invented numbers),
+// and the fallback says so in the answer itself. No key is ever
+// logged or returned to the browser. A successful OpenAI call
 // records a verification flag on the account row (best-effort) — the
-// Live connections probe shows an engine "Live" only when that flag
-// names the currently selected provider.
+// Live connections probe shows the engine "Live" only after such a
+// call has succeeded for that account.
 import { z } from "zod";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
@@ -145,7 +130,9 @@ export function aiExtrasFromRow(
   ownerId: string,
 ): AiCallSettings {
   return {
-    provider: asAiProvider(row?.aiProvider),
+    // Fixed engine: ChatGPT (OpenAI) for every account. The stored
+    // ai_provider is ignored — per-account provider choice is gone.
+    provider: "openai",
     geminiKey: row?.geminiApiKey ?? process.env.GEMINI_API_KEY ?? null,
     openRouterKey:
       row?.openRouterApiKey ?? process.env.OPENROUTER_API_KEY ?? null,
