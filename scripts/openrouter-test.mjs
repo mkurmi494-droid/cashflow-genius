@@ -85,6 +85,14 @@ console.error = (...a) => {
 
 const { aiComplete, aiExtrasFromRow, DEFAULT_OPENROUTER_MODEL, OPENROUTER_FREE_MODELS } = await import(bundle);
 
+// ---- bundle client/cfoHistory.ts (plain TS, no JSX) for the history tests ----
+const cfoBundle = join(outDir, "cfoHistory.mjs");
+execSync(
+  `node_modules/.bin/esbuild client/cfoHistory.ts --bundle --platform=node --format=esm --outfile=${cfoBundle}`,
+  { cwd: repoRoot, stdio: "pipe" },
+);
+const { parseStoredAnswer, buildTurns, displayRawText } = await import(cfoBundle);
+
 const cfoSchema = z.object({
   directAnswer: z.string(),
   numbers: z.array(z.object({ label: z.string(), value: z.string() })),
@@ -520,6 +528,188 @@ mockHandler = () =>
   });
   check("whole chain stays inside the ~50s attempt budget", () => {
     assert.ok(elapsed < 50000, `chain took ${elapsed}ms`);
+  });
+}
+
+// (g2) snake_case JSON (the live Ernie reply) becomes structured fields,
+//      never raw JSON in the direct answer — Quirk 1
+const ernieReply = JSON.stringify({
+  direct_answer:
+    "Bilkul sahi — is mahine aapka cashflow strong hai. Revenue INR 3,540 hai aur expenses sirf INR 100, isliye net profit INR 3,440 bacha hai.",
+  key_numbers: [
+    { label: "Revenue", value: "INR 3,540" },
+    { label: "Expenses", value: "INR 100" },
+    { label: "Net profit", value: "INR 3,440" },
+  ],
+  explanation: "Cashflow strong hai kyunki revenue expenses se bahut zyada hai.",
+  supporting_data: ["Available cash INR 3,440"],
+  options: ["Agle mahine bhi aise hi chalao."],
+  assumptions: "Figures code se calculate kiye gaye hain.",
+});
+resetMock();
+mockHandler = () => jsonResponse(200, openRouterOk(ernieReply));
+{
+  const res = await aiComplete(
+    "mera cashflow is mahine kaisa hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "baidu/ernie-5.5-flash-preview:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("snake_case JSON reply parses as structured fields, not raw JSON", () => {
+    assert.ok(res.directAnswer.startsWith("Bilkul sahi"));
+    assert.ok(!res.directAnswer.includes("direct_answer"));
+    assert.ok(!res.directAnswer.includes("{"));
+    assert.equal(res.numbers.length, 3);
+    assert.equal(res.numbers[0].label, "Revenue");
+    assert.equal(res.numbers[0].value, "INR 3,540");
+    assert.equal(res.explanation, "Cashflow strong hai kyunki revenue expenses se bahut zyada hai.");
+    assert.equal(requests.length, 1);
+  });
+}
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(
+      JSON.stringify({
+        direct_answer: "Short answer.",
+        key_numbers: [
+          "Revenue: INR 3,540",
+          { name: "Expenses", amount: "INR 100" },
+        ],
+      }),
+    ),
+  );
+{
+  const res = await aiComplete(
+    "mera cashflow is mahine kaisa hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "baidu/ernie-5.5-flash-preview:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("key_numbers items as strings / {name, amount} normalise to label+value", () => {
+    assert.equal(res.directAnswer, "Short answer.");
+    assert.equal(res.numbers.length, 2);
+    assert.deepEqual(res.numbers[0], { label: "Revenue", value: "INR 3,540" });
+    assert.deepEqual(res.numbers[1], { label: "Expenses", value: "INR 100" });
+  });
+}
+
+// (g3) broken JSON is repaired, not dropped — trailing comma, raw
+//      newline inside a string value
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(
+      '{"directAnswer": "line one\nline two", "numbers": [], "explanation": "e", "supportingData": [], "options": [], "assumptions": "a",}',
+    ),
+  );
+{
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("JSON with trailing comma + raw newline in a string is repaired and parsed", () => {
+    assert.ok(res.directAnswer.includes("line one"));
+    assert.ok(res.directAnswer.includes("line two"));
+    assert.ok(!res.directAnswer.includes("could not reach"));
+  });
+}
+
+// (g4) a stored free-text conversation renders its answer from history —
+//      Quirk 2 (data/render level: the client's history helpers)
+{
+  const storedFreeText = JSON.stringify({
+    directAnswer: ernieReply,
+    numbers: [],
+    explanation:
+      "The model answered as free text rather than the usual structured JSON, so the key numbers could not be separated out — the direct answer above carries the full reply.",
+    supportingData: [],
+    options: [],
+    assumptions: "Answered by baidu/ernie-5.5-flash-preview:free as free text.",
+    sources: ["Available cash INR 3,440 = opening 0 + income INR 3,540 − expenses INR 100"],
+    language: "hinglish",
+  });
+  check("stored free-text answer unwraps to structured fields on re-open", () => {
+    const a = parseStoredAnswer(storedFreeText);
+    assert.ok(a);
+    assert.ok(a.directAnswer.startsWith("Bilkul sahi"));
+    assert.ok(!a.directAnswer.includes("direct_answer"));
+    assert.equal(a.numbers.length, 3);
+    assert.equal(a.numbers[2].value, "INR 3,440");
+    assert.equal(a.language, "hinglish");
+    assert.equal(a.sources.length, 1);
+  });
+  const storedStructured = JSON.stringify({
+    ...cannedCfo,
+    sources: ["Available cash INR 3,440"],
+    language: "en",
+  });
+  check("stored structured answer is unchanged on re-open", () => {
+    const a = parseStoredAnswer(storedStructured);
+    assert.ok(a);
+    assert.equal(a.directAnswer, cannedCfo.directAnswer);
+    assert.equal(a.numbers[0].value, "₹3,440");
+  });
+  check("history pairing works in normal message order", () => {
+    const turns = buildTurns([
+      { role: "user", content: "mera cashflow is mahine kaisa hai?" },
+      { role: "assistant", content: storedFreeText },
+    ]);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].q, "mera cashflow is mahine kaisa hai?");
+    assert.ok(turns[0].a);
+    assert.ok(turns[0].a.directAnswer.startsWith("Bilkul sahi"));
+  });
+  check("history pairing works when the assistant row precedes its question (created_at tie)", () => {
+    const turns = buildTurns([
+      { role: "assistant", content: storedFreeText },
+      { role: "user", content: "mera cashflow is mahine kaisa hai?" },
+    ]);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].q, "mera cashflow is mahine kaisa hai?");
+    assert.ok(turns[0].a);
+    assert.ok(turns[0].a.directAnswer.startsWith("Bilkul sahi"));
+  });
+  check("multi-turn history pairs each answer with its question, in order", () => {
+    const turns = buildTurns([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: storedStructured },
+      { role: "assistant", content: storedFreeText },
+      { role: "user", content: "q2" },
+    ]);
+    assert.equal(turns.length, 2);
+    assert.equal(turns[0].q, "q1");
+    assert.ok(turns[0].a);
+    assert.equal(turns[0].a.directAnswer, cannedCfo.directAnswer);
+    assert.equal(turns[1].q, "q2");
+    assert.ok(turns[1].a);
+    assert.ok(turns[1].a.directAnswer.startsWith("Bilkul sahi"));
+  });
+  check("fallback display text never shows raw JSON", () => {
+    const shown = displayRawText(ernieReply);
+    assert.ok(shown.startsWith("Bilkul sahi"));
+    assert.ok(!shown.includes("direct_answer"));
+    assert.ok(!shown.includes("{"));
+    assert.equal(displayRawText("plain prose, no JSON"), "plain prose, no JSON");
   });
 }
 
