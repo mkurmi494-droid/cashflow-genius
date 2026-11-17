@@ -15,6 +15,13 @@
       "when": 1794675527867,
       "tag": "0001_invoice_number_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794908796372,
+      "tag": "0002_openrouter_ai",
+      "breakpoints": true
     }
   ]
 }
