@@ -93,7 +93,7 @@ function detectQuestionLang(q: string): CfoLang {
   return "en";
 }
 
-export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
+export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
   const cur = state.business.currency;
   const s = useMemo(() => summarise(state), [state]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -130,6 +130,31 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
     const trimmed = q.trim();
     if (trimmed.length < 2 || ask.isPending) return;
     ask.mutate(trimmed);
+  };
+
+  // Delete a conversation only after the shared confirm dialog — there
+  // is no undo for a deleted conversation, so the dialog is the guard.
+  const delConversation = useMutation({
+    mutationFn: (id: string) => api.deleteConversation({ conversationId: id }),
+    onSuccess: (_res, id) => {
+      if (activeId === id) {
+        setActiveId(null);
+        setLocalTurns([]);
+      }
+      notify("Conversation deleted.");
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+
+  const askDeleteConversation = async (c: { id: string; title: string }) => {
+    const ok = await confirm({
+      title: "Delete this conversation?",
+      body: "The whole conversation — every question and answer in it — will be removed. This cannot be undone.",
+      detail: c.title,
+      confirmLabel: "Delete conversation",
+      danger: true,
+    });
+    if (ok) delConversation.mutate(c.id);
   };
 
   // Turns from the stored conversation. buildTurns pairs messages by
@@ -236,7 +261,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
   };
 
   return (
-    <div className="page-anim space-y-6">
+    <div className="page-anim space-y-6 pb-8">
       <section className="card relative overflow-hidden p-5 sm:p-6">
         <div
           aria-hidden
@@ -360,7 +385,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
             ) : (
               <ul className="space-y-1.5">
                 {state.conversations.map((c) => (
-                  <li key={c.id}>
+                  <li key={c.id} className="flex items-center gap-1">
                     <button
                       type="button"
                       aria-current={activeId === c.id}
@@ -368,13 +393,21 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
                         setActiveId(c.id);
                         setLocalTurns([]);
                       }}
-                      className={`w-full truncate rounded-xl px-3 py-2 text-left text-sm font-semibold ${
+                      className={`min-w-0 flex-1 truncate rounded-xl px-3 py-2 text-left text-sm font-semibold ${
                         activeId === c.id
                           ? "bg-[var(--surface-soft)] text-[var(--accent)]"
                           : "hover:bg-[var(--surface-soft)]"
                       }`}
                     >
                       {c.title}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete conversation ${c.title}`}
+                      onClick={() => askDeleteConversation(c)}
+                      className="shrink-0 rounded-lg px-2 py-2 text-sm text-[var(--dim)] hover:bg-[var(--surface-soft)] hover:text-[var(--err-text)]"
+                    >
+                      🗑
                     </button>
                   </li>
                 ))}
@@ -444,7 +477,7 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
           </div>
 
           <form
-            className="card sticky bottom-16 z-30 flex flex-col gap-3 p-4 shadow-[0_-8px_24px_rgba(76,29,149,0.10)] sm:flex-row lg:bottom-0"
+            className="card fixed inset-x-4 bottom-16 z-30 flex flex-row gap-2 p-3 shadow-[0_-8px_24px_rgba(76,29,149,0.10)] lg:sticky lg:inset-x-0 lg:bottom-0 lg:gap-3 lg:p-4"
             onSubmit={(e) => {
               e.preventDefault();
               submit(question);
@@ -456,14 +489,14 @@ export function AiCfoPage({ state, notify, saveToVault }: PageProps) {
             <input
               id="cfo-question"
               className="field flex-1"
-              placeholder="Ask in English or Hinglish — e.g. Can I afford ₹50,000 on marketing this month?"
+              placeholder="Ask anything"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               maxLength={1000}
             />
             <button
               type="submit"
-              className="btn-primary px-6 py-2.5 text-sm"
+              className="btn-primary shrink-0 px-4 py-2.5 text-sm sm:px-6"
               disabled={ask.isPending || question.trim().length < 2}
             >
               {ask.isPending ? "Thinking…" : "Ask AI CFO"}
