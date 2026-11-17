@@ -358,37 +358,231 @@ function extractOpenRouterText(data: {
   return { content, reasoning };
 }
 
+/** Repair the two ways free models most often break otherwise-valid
+ *  JSON: trailing commas before } or ], and raw newlines/tabs inside
+ *  string values (a reasoning model streaming prose into a string).
+ *  Only the broken characters are touched; a reply that is already
+ *  valid JSON comes back unchanged. */
+function repairJsonText(text: string): string {
+  const noTrailingCommas = text.replace(/,\s*([}\]])/g, "$1");
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < noTrailingCommas.length; i++) {
+    const ch = noTrailingCommas[i]!;
+    if (inString) {
+      if (ch === "\\") {
+        out += ch + (noTrailingCommas[i + 1] ?? "");
+        i++;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+        out += ch;
+        continue;
+      }
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      out += ch;
+    } else {
+      if (ch === '"') inString = true;
+      out += ch;
+    }
+  }
+  return out;
+}
+
 /** Parse a model reply as JSON, tolerating the ways free models wrap
- *  it: markdown code fences, and prose around the object. Returns
+ *  it: markdown code fences, prose around the object, trailing
+ *  commas, and raw control characters inside strings. Returns
  *  undefined when no JSON object can be found. */
 function parseJsonLoosely(text: string): unknown | undefined {
   const stripped = text
     .replace(/```json/gi, "")
     .replace(/```/g, "")
     .trim();
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    /* not bare JSON — try to find an object inside the text */
+  for (const candidate of [stripped, repairJsonText(stripped)]) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      /* not bare JSON — try to find an object inside the text */
+    }
   }
   const start = stripped.indexOf("{");
   const end = stripped.lastIndexOf("}");
   if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(stripped.slice(start, end + 1));
-    } catch {
-      return undefined;
+    const inner = stripped.slice(start, end + 1);
+    for (const candidate of [inner, repairJsonText(inner)]) {
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        /* keep trying the next repair */
+      }
     }
   }
   return undefined;
 }
 
+/** True when the text is JSON (or JSON wrapped in fences/prose) rather
+ *  than plain prose — used to decide whether the free-text path may
+ *  embed it verbatim. Raw JSON must never be shown to the user as the
+ *  "direct answer". */
+function looksLikeJson(text: string): boolean {
+  const stripped = text
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  return stripped.startsWith("{") || stripped.startsWith("[");
+}
+
+function toCamelKey(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** Aliases free models use for the CFO shape's fields, after
+ *  snake_case is camelCased: key_numbers → numbers, key_points →
+ *  points. */
+const ANSWER_KEY_ALIASES: Record<string, string> = {
+  keyNumbers: "numbers",
+  keyPoints: "points",
+  keyFigures: "numbers",
+};
+
+/** Normalise one key-numbers item into {label, value}. Accepts
+ *  {label,value}, {name,value}, {key,amount} and plain strings —
+ *  "Revenue: INR 3,540" splits at the first ": ". Items with neither
+ *  a label nor a value are dropped (null). */
+function normalizeNumberItem(item: unknown): { label: string; value: string } | null {
+  const asStr = (v: unknown): string =>
+    typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+  if (typeof item === "string") {
+    const s = item.trim();
+    if (!s) return null;
+    const cut = s.indexOf(": ");
+    if (cut > 0) return { label: s.slice(0, cut).trim(), value: s.slice(cut + 2).trim() };
+    return { label: "", value: s };
+  }
+  if (item && typeof item === "object") {
+    const o = item as Record<string, unknown>;
+    const label = asStr(o.label ?? o.name ?? o.key ?? o.title);
+    const value = asStr(o.value ?? o.amount ?? o.text ?? o.figure);
+    if (!label && !value) return null;
+    return { label, value };
+  }
+  return null;
+}
+
+/** Recursively camelCase a parsed model reply's keys (direct_answer
+ *  → directAnswer, supporting_data → supportingData) and map known
+ *  aliases, so a valid JSON answer validates against the camelCase
+ *  schema even when the model used snake_case. Key-numbers items are
+ *  normalised into {label, value}; string arrays keep only strings. */
+function normalizeAnswerShape(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizeAnswerShape);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const camel = toCamelKey(k);
+      const mapped = ANSWER_KEY_ALIASES[camel] ?? camel;
+      out[mapped] = normalizeAnswerShape(v);
+    }
+    if (Array.isArray(out.numbers)) {
+      out.numbers = (out.numbers as unknown[])
+        .map(normalizeNumberItem)
+        .filter((n): n is { label: string; value: string } => n !== null);
+    }
+    for (const k of ["supportingData", "options", "points"]) {
+      if (Array.isArray(out[k])) {
+        out[k] = (out[k] as unknown[]).filter(
+          (v): v is string => typeof v === "string" && v.trim().length > 0,
+        );
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Last-resort salvage: pull the value of a named string field out of
+ *  text that looks like JSON but would not parse (for example a
+ *  string cut off mid-way). Handles backslash escapes and returns the
+ *  unescaped string; null when the field is not there. */
+function extractJsonStringField(text: string, keys: string[]): string | null {
+  for (const key of keys) {
+    const idx = text.indexOf(`"${key}"`);
+    if (idx < 0) continue;
+    const colon = text.indexOf(":", idx + key.length + 2);
+    if (colon < 0) continue;
+    let i = colon + 1;
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (text[i] !== '"') continue;
+    let j = i + 1;
+    let raw = "";
+    while (j < text.length) {
+      const ch = text[j]!;
+      if (ch === "\\" && j + 1 < text.length) {
+        raw += ch + text[j + 1];
+        j += 2;
+        continue;
+      }
+      if (ch === '"') break;
+      raw += ch;
+      j++;
+    }
+    if (raw.trim()) {
+      try {
+        const decoded = JSON.parse(`"${raw}"`);
+        if (typeof decoded === "string" && decoded.trim()) return decoded.trim();
+      } catch {
+        return raw.trim();
+      }
+    }
+  }
+  return null;
+}
+
+/** Try a parsed reply (and its single-level wrappers) against the
+ *  schema, with key normalisation — the JSON ladder every reply goes
+ *  through before any free-text handling. Returns the validated data
+ *  or null. */
+function tryJsonAnswer(parsed: unknown, schema: z.ZodTypeAny): unknown | null {
+  const candidates: unknown[] = [parsed];
+  if (parsed && typeof parsed === "object") {
+    for (const k of ["answer", "result", "data"]) {
+      const v = (parsed as Record<string, unknown>)[k];
+      if (v && typeof v === "object") candidates.push(v);
+    }
+  }
+  for (const candidate of candidates) {
+    const checked = schema.safeParse(candidate);
+    if (checked.success) return checked.data;
+    const normalized = normalizeAnswerShape(candidate);
+    const rechecked = schema.safeParse(normalized);
+    if (rechecked.success) return rechecked.data;
+  }
+  return null;
+}
+
 /** Build a best-effort answer from the model's free-text reply when
  *  no JSON matching the schema could be extracted. A real grounded
- *  text answer beats the rule-based fallback. Returns null for shapes
- *  free text cannot honestly fill — the vision extraction shape
- *  (readable/…) needs structured fields, so a text reply there is not
- *  usable and the caller tries the next model instead. */
+ *  text answer beats the rule-based fallback. The JSON ladder runs
+ *  FIRST: a reply that is valid JSON with direct_answer/key_numbers
+ *  is used as structured fields, never embedded raw. Only genuinely
+ *  non-JSON prose goes down the free-text path, and text that looks
+ *  like JSON but would not parse is salvaged field-by-field instead
+ *  of being shown raw. Returns null for shapes free text cannot
+ *  honestly fill — the vision extraction shape (readable/…) needs
+ *  structured fields, so a text reply there is not usable and the
+ *  caller tries the next model instead. */
 function textAnswerForSchema(
   schema: z.ZodTypeAny | undefined,
   text: string,
@@ -398,6 +592,46 @@ function textAnswerForSchema(
   const clean = text.slice(0, 4000).trim();
   if (!clean) return null;
   const keys = shapeKeys(schema);
+  // 1. JSON first: valid JSON (snake_case included) becomes structured
+  //    fields — this is the Ernie case, whose reply was JSON with
+  //    direct_answer/key_numbers but failed validation as-is.
+  const loose = parseJsonLoosely(clean);
+  if (loose !== undefined) {
+    const jsonAnswer = tryJsonAnswer(loose, schema);
+    if (jsonAnswer !== null) return jsonAnswer;
+    // 2. JSON that would not fully validate: keep whatever structured
+    //    fields survived normalisation instead of dropping the answer.
+    if (keys.includes("directAnswer")) {
+      const normalized = normalizeAnswerShape(loose);
+      const direct =
+        typeof (normalized as Record<string, unknown>)?.directAnswer === "string"
+          ? ((normalized as Record<string, unknown>).directAnswer as string)
+          : extractJsonStringField(clean, ["direct_answer", "directAnswer"]);
+      if (direct && direct.trim()) {
+        const n = normalized as Record<string, unknown>;
+        const obj = {
+          directAnswer: direct.trim().slice(0, 4000),
+          numbers: Array.isArray(n.numbers) ? n.numbers : [],
+          explanation:
+            typeof n.explanation === "string" && n.explanation
+              ? n.explanation
+              : "The model answered in JSON that could not be fully parsed — the direct answer above carries the full reply.",
+          supportingData: Array.isArray(n.supportingData) ? n.supportingData : [],
+          options: Array.isArray(n.options) ? n.options : [],
+          assumptions:
+            typeof n.assumptions === "string" && n.assumptions
+              ? n.assumptions
+              : `Answered by ${model}. Figures come only from the data supplied with the question; nothing was invented.`,
+        };
+        const checked = schema.safeParse(obj);
+        if (checked.success) return checked.data;
+      }
+    }
+  }
+  // 3. Text that looks like JSON but yielded nothing usable is NOT
+  //    embedded raw — the caller tries the next model instead.
+  if (looksLikeJson(clean)) return null;
+  // 4. Genuinely non-JSON prose: use it as the answer.
   if (keys.includes("directAnswer")) {
     const obj = {
       directAnswer: clean,
@@ -532,18 +766,12 @@ async function callOpenRouter(
     const parsed = parseJsonLoosely(text);
     if (parsed !== undefined) {
       // Try the object itself, then a single-level wrapper
-      // ({ answer: {...} } / { result: {...} } / { data: {...} }).
-      const candidates: unknown[] = [parsed];
-      if (parsed && typeof parsed === "object") {
-        for (const k of ["answer", "result", "data"]) {
-          const v = (parsed as Record<string, unknown>)[k];
-          if (v && typeof v === "object") candidates.push(v);
-        }
-      }
-      for (const candidate of candidates) {
-        const checked = schema.safeParse(candidate);
-        if (checked.success) return checked.data;
-      }
+      // ({ answer: {...} } / { result: {...} } / { data: {...} }),
+      // each as-is and with keys normalised (snake_case → camelCase,
+      // key_numbers → numbers) — a valid JSON reply whose keys do not
+      // match the schema's case must still land as structured fields.
+      const jsonAnswer = tryJsonAnswer(parsed, schema);
+      if (jsonAnswer !== null) return jsonAnswer;
     }
     // No JSON matching the schema — but there IS a real answer in text.
     // Use it rather than throwing the work away.
