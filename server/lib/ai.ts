@@ -251,11 +251,7 @@ function ruleBasedFallback(
         `The AI CFO could not reach ${engine} just now — the AI service did not answer. This is not an AI analysis. The exact figures behind your question are listed under “What the AI used” below, and on the dashboard.`,
       numbers: [],
       explanation:
-        provider === "openrouter"
-          ? "Check Settings → Live connections for the OpenRouter status. If no key is saved, add a free OpenRouter API key there (openrouter.ai — free :free models, no payment needed) or set OPENROUTER_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or OpenRouter's service. Free models are capped at 50 requests a day."
-          : provider === "openai"
-            ? "Check Settings → Live connections for the OpenAI status. If no key is saved, add an OpenAI API key there (platform.openai.com → API keys — usage is billed to your OpenAI account) or set OPENAI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or OpenAI's service (for example, insufficient credits)."
-            : "Check Settings → Live connections for the Gemini status. If no key is saved, add a free Gemini API key there (Google AI Studio, free tier) or set GEMINI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or Google's service.",
+        "ChatGPT answers for everyone from one shared key on the server — no key is needed from you, and there is nothing to add in Settings. If this keeps happening, the shared key may be invalid, its OpenAI account may have insufficient credits, or OpenAI's service is having trouble — try again in a bit. You can check the OpenAI status in Settings → Live connections.",
       supportingData: [],
       options: [
         `Check the ${engine} status in Settings → Live connections.`,
@@ -268,21 +264,10 @@ function ruleBasedFallback(
   if (keys.includes("headline") && keys.includes("points")) {
     return {
       headline: `AI briefing unavailable — ${engine} is not connected`,
-      points:
-        provider === "openrouter"
-          ? [
-              "Set a free OpenRouter API key in Settings → Live connections to get daily AI briefings. Free :free models cost nothing and are capped at 50 requests a day.",
-              "Your cash, invoices and savings are still up to date on the dashboard.",
-            ]
-          : provider === "openai"
-            ? [
-                "Set an OpenAI API key in Settings → Live connections to get daily AI briefings. Usage is billed to your OpenAI account — gpt-4o-mini costs a few paise per question.",
-                "Your cash, invoices and savings are still up to date on the dashboard.",
-              ]
-            : [
-                "Set a free Gemini API key in Settings → Live connections to get daily AI briefings.",
-                "Your cash, invoices and savings are still up to date on the dashboard.",
-              ],
+      points: [
+        "ChatGPT answers for everyone from one shared key on the server — no key is needed from you. If briefings stay unavailable, the shared key may be invalid or out of credits, or OpenAI's service is having trouble.",
+        "Your cash, invoices and savings are still up to date on the dashboard.",
+      ],
     };
   }
   if (keys.includes("readable")) {
@@ -523,12 +508,23 @@ function toCamelKey(key: string): string {
 
 /** Aliases free models use for the CFO/briefing shapes' fields, after
  *  snake_case is camelCased: key_numbers → numbers, key_points →
- *  points, briefing_points → points. */
+ *  points, briefing_points → points. gpt-4o-mini also sometimes names
+ *  the answer field "answer" / "response" / "message" / "result" /
+ *  "reply" / "summary" instead of "direct_answer" — seen live
+ *  2026-11-17, when three good gpt-4o-mini answers were thrown away
+ *  to the rule-based fallback for exactly this. Those map to
+ *  directAnswer so the answer survives. */
 const ANSWER_KEY_ALIASES: Record<string, string> = {
   keyNumbers: "numbers",
   keyPoints: "points",
   keyFigures: "numbers",
   briefingPoints: "points",
+  answer: "directAnswer",
+  response: "directAnswer",
+  message: "directAnswer",
+  result: "directAnswer",
+  reply: "directAnswer",
+  summary: "directAnswer",
 };
 
 /** Normalise one key-numbers item into {label, value}. Accepts
@@ -567,6 +563,15 @@ function normalizeAnswerShape(value: unknown): unknown {
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       const camel = toCamelKey(k);
       const mapped = ANSWER_KEY_ALIASES[camel] ?? camel;
+      // Never let an alias overwrite a real directAnswer seen earlier
+      // in the same object (a reply that carries both names).
+      if (
+        mapped === "directAnswer" &&
+        typeof out.directAnswer === "string" &&
+        out.directAnswer.trim()
+      ) {
+        continue;
+      }
       out[mapped] = normalizeAnswerShape(v);
     }
     if (Array.isArray(out.numbers)) {
@@ -868,7 +873,16 @@ function salvageTruncatedJsonAnswer(
 ): unknown | null {
   const keys = shapeKeys(schema);
   if (keys.includes("directAnswer")) {
-    const direct = extractJsonStringField(clean, ["direct_answer", "directAnswer"]);
+    const direct = extractJsonStringField(clean, [
+      "direct_answer",
+      "directAnswer",
+      "answer",
+      "response",
+      "message",
+      "result",
+      "reply",
+      "summary",
+    ]);
     if (!direct) return null;
     const numbersRaw = extractJsonArrayField(clean, [
       "key_numbers",
