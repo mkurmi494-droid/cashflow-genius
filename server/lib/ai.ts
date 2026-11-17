@@ -11,7 +11,11 @@ import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { userWorkspaceState } from "../schema";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
+// gemini-2.0-flash was shut down by Google on 1 Jun 2026, so every call
+// to it failed and the CFO always fell back. gemini-3.8-flash is the
+// replacement Google's own 2.0 model page recommends ("Migrate to Gemini
+// 3.8 Flash"), still on the free tier.
+const GEMINI_MODEL = "gemini-3.8-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export async function getUserGeminiKey(
@@ -55,13 +59,13 @@ function ruleBasedFallback(
   if (keys.includes("directAnswer")) {
     return {
       directAnswer:
-        "The AI CFO could not reach Gemini just now — no Gemini API key is configured for this account. This is not an AI analysis. The exact figures behind your question are listed under “What the AI used” below, and on the dashboard.",
+        "The AI CFO could not reach Gemini just now — the AI service did not answer. This is not an AI analysis. The exact figures behind your question are listed under “What the AI used” below, and on the dashboard.",
       numbers: [],
       explanation:
-        "Add a free Gemini API key in Settings → Live connections (Google AI Studio, free tier) or set GEMINI_API_KEY in Vercel, and the AI CFO will answer from your real figures.",
+        "Check Settings → Live connections for the Gemini status. If no key is saved, add a free Gemini API key there (Google AI Studio, free tier) or set GEMINI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or Google's service.",
       supportingData: [],
       options: [
-        "Add a free Gemini API key in Settings to enable AI answers.",
+        "Check the Gemini status in Settings → Live connections.",
         "Check the dashboard, Money Flow and What’s due for the live figures meanwhile.",
       ],
       assumptions:
