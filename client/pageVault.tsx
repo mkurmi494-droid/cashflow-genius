@@ -561,14 +561,16 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
   const [orKeyInput, setOrKeyInput] = useState("");
   const [orModelInput, setOrModelInput] = useState(state.openRouterModel ?? "");
   const setProvider = useMutation({
-    mutationFn: (p: "gemini" | "openrouter") => api.setAiProvider({ provider: p }),
+    mutationFn: (p: "gemini" | "openrouter" | "openai") => api.setAiProvider({ provider: p }),
     onSuccess: (res) => {
       void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
       void integrations.refetch();
       notify(
         res.provider === "openrouter"
           ? "AI provider switched to OpenRouter. Save a free OpenRouter key below to enable AI answers — the free :free models cost nothing, capped at 50 requests a day."
-          : "AI provider switched to Gemini.",
+          : res.provider === "openai"
+            ? "AI provider switched to OpenAI (ChatGPT). Save your OpenAI key below to enable AI answers — usage is billed to your OpenAI account, gpt-4o-mini costs a few paise per question."
+            : "AI provider switched to Gemini.",
       );
     },
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
@@ -601,6 +603,47 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
       void integrations.refetch();
       notify(
         `OpenRouter model set to ${res.model}. It will show Live only after a real call with this model succeeds.`,
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+
+  // ---- OpenAI API key + model (ChatGPT) ----
+  // Same vault rules as the other keys: stored server-side only, never
+  // shown back; saving/changing clears the verified flag. OpenAI usage
+  // is billed to the key owner's OpenAI account — no free tier. Use a
+  // FRESH key (platform.openai.com → API keys); never reuse a key that
+  // was pasted in chat.
+  const [openAiKeyInput, setOpenAiKeyInput] = useState("");
+  const [openAiModelInput, setOpenAiModelInput] = useState(state.openAiModel ?? "");
+  const saveOpenAiKey = useMutation({
+    mutationFn: () => api.saveOpenAiKey({ apiKey: openAiKeyInput.trim() }),
+    onSuccess: (res) => {
+      setOpenAiKeyInput("");
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify(
+        `OpenAI API key saved securely on the server (ending ••••${res.last4}). Honest status: OpenAI is still Not connected — the AI CFO keeps answering with the rule-based fallback until a real OpenAI call succeeds.`,
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const removeOpenAiKey = useMutation({
+    mutationFn: () => api.removeOpenAiKey({}),
+    onSuccess: () => {
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify("Your saved OpenAI API key was removed from the server.");
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const saveOpenAiModel = useMutation({
+    mutationFn: () => api.setOpenAiModel({ model: openAiModelInput.trim() }),
+    onSuccess: (res) => {
+      void geminiQueryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void integrations.refetch();
+      notify(
+        `OpenAI model set to ${res.model}. It will show Live only after a real call with this model succeeds.`,
       );
     },
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
@@ -1261,11 +1304,14 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         />
         <p className="text-sm leading-relaxed text-[var(--dim)]">
           The AI CFO can run on <strong className="text-[var(--text)]">Gemini</strong> (Google AI
-          Studio key, gemini-3.8-flash) or on{" "}
+          Studio key, gemini-3.8-flash), on{" "}
           <strong className="text-[var(--text)]">OpenRouter</strong> (any model — free{" "}
-          <code>:free</code> models cost nothing, capped at 50 requests a day). Gemini is the
-          default. Google currently blocks the free tier for some accounts (HTTP 403 “free tier
-          is not available for this project”) — if Gemini keeps failing, switch to OpenRouter.
+          <code>:free</code> models cost nothing, capped at 50 requests a day) or on{" "}
+          <strong className="text-[var(--text)]">OpenAI (ChatGPT)</strong> (your own OpenAI key,
+          default gpt-4o-mini — usage is billed to your OpenAI account, a few paise per
+          question). Gemini is the default. Google currently blocks the free tier for some
+          accounts (HTTP 403 “free tier is not available for this project”) — if Gemini keeps
+          failing, switch to OpenRouter or OpenAI.
           Switching never touches your records; it only changes which engine is called, and it
           clears the verified status, so the new provider must prove itself with a real call
           before Live connections shows it Live.
@@ -1275,6 +1321,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             [
               { key: "gemini", label: "Gemini" },
               { key: "openrouter", label: "OpenRouter (free models)" },
+              { key: "openai", label: "OpenAI (ChatGPT)" },
             ] as const
           ).map((o) => (
             <button
@@ -1299,7 +1346,9 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           Current engine:{" "}
           {state.aiProvider === "openrouter"
             ? `OpenRouter — model ${state.openRouterModel}`
-            : "Gemini — gemini-3.8-flash"}
+            : state.aiProvider === "openai"
+              ? `OpenAI (ChatGPT) — model ${state.openAiModel}`
+              : "Gemini — gemini-3.8-flash"}
           .
         </p>
       </section>
@@ -1454,6 +1503,95 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           Key kahan se milegi: openrouter.ai → Keys → Create Key (free models ke liye payment
           nahi chahiye). Yahan paste karo — chat mein kabhi mat bhejo, aur jo key kabhi chat
           mein aa gayi ho use dobara use mat karo; hamesha fresh key banao.
+        </p>
+      </section>
+
+      <section className="card p-5" aria-label="OpenAI API key">
+        <SectionTitle
+          title="OpenAI API key"
+          hint="ChatGPT answers — usage is billed to your OpenAI account"
+        />
+        <p className="text-sm leading-relaxed text-[var(--dim)]">
+          Agar tumhare paas platform.openai.com ki API key hai, to yahan save kar sakte ho. Key{" "}
+          <strong className="text-[var(--text)]">sirf server par store hoti hai</strong> — browser ko kabhi wapas
+          nahi bheji jati, yahan dobara dikhayi nahi jati, aur chat mein paste karne ki zaroorat
+          nahi hai. OpenAI ka koi free tier nahi hai — har CFO sawaal tumhare OpenAI account
+          par bill hota hai; default model gpt-4o-mini ek sawaal ke kuch paise leta hai. Scam
+          Shield ke screenshot checks bhi isi model se chalte hain (gpt-4o-mini image input
+          leta hai).
+        </p>
+        <p className="mt-2 text-sm font-semibold" role="status">
+          {state.openAiKeySaved
+            ? `A key is saved for your account (ending ••••${state.openAiKeyLast4}). OpenAI status: ${integrations.data?.services.find((s) => s.id === "openai")?.status === "live" ? "Live — verified by a real OpenAI call." : "Not connected — saved for a future connection."}`
+            : "No OpenAI API key saved for your account yet. OpenAI status: Not connected."}
+        </p>
+        <form
+          className="mt-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (openAiKeyInput.trim().length >= 20) saveOpenAiKey.mutate();
+          }}
+        >
+          <label className="block flex-1">
+            <span className="sr-only">OpenAI API key from platform.openai.com</span>
+            <input
+              className="field"
+              type="password"
+              value={openAiKeyInput}
+              onChange={(e) => setOpenAiKeyInput(e.target.value)}
+              aria-label="OpenAI API key from platform.openai.com"
+              placeholder="Paste your OpenAI API key (from platform.openai.com)"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            className="btn-primary px-5 py-2.5 text-sm"
+            disabled={saveOpenAiKey.isPending || openAiKeyInput.trim().length < 20}
+          >
+            {saveOpenAiKey.isPending ? "Saving…" : state.openAiKeySaved ? "Replace saved key" : "Save key securely"}
+          </button>
+          {state.openAiKeySaved ? (
+            <button
+              type="button"
+              className="btn-ghost px-5 py-2.5 text-sm text-[var(--err-text)]"
+              disabled={removeOpenAiKey.isPending}
+              onClick={() => removeOpenAiKey.mutate()}
+            >
+              Remove key
+            </button>
+          ) : null}
+        </form>
+        <form
+          className="mt-3 flex flex-col gap-2 sm:flex-row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (openAiModelInput.trim().length >= 3) saveOpenAiModel.mutate();
+          }}
+        >
+          <label className="block flex-1">
+            <span className="sr-only">OpenAI model id</span>
+            <input
+              className="field"
+              value={openAiModelInput}
+              onChange={(e) => setOpenAiModelInput(e.target.value)}
+              aria-label="OpenAI model id"
+              placeholder="gpt-4o-mini"
+              autoComplete="off"
+            />
+          </label>
+          <button
+            type="submit"
+            className="btn-primary px-5 py-2.5 text-sm"
+            disabled={saveOpenAiModel.isPending || openAiModelInput.trim().length < 3}
+          >
+            {saveOpenAiModel.isPending ? "Saving…" : "Save model"}
+          </button>
+        </form>
+        <p className="mt-2 text-xs leading-relaxed text-[var(--dim)]">
+          Key kahan se milegi: platform.openai.com → API keys → Create new secret key. Yahan
+          paste karo — chat mein kabhi mat bhejo, aur jo key kabhi chat mein aa gayi ho use
+          dobara use mat karo; pehle use revoke karke hamesha fresh key banao.
         </p>
       </section>
 
