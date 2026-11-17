@@ -4727,13 +4727,27 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
           title: args.question.slice(0, 60),
         });
       }
+      // The two rows of one turn are inserted in a single statement,
+      // so they would share one created_at (now() is constant inside
+      // a statement) — and ordering by created_at could then tie and
+      // return the answer before its question, which history pairing
+      // used to drop. Give the answer an explicit timestamp one second
+      // after the question so history order is deterministic.
+      const askedAt = new Date();
       await db.insert(schema.aiMessages).values([
-        { id: uid(), conversationId: convId, role: "user", content: args.question },
+        {
+          id: uid(),
+          conversationId: convId,
+          role: "user",
+          content: args.question,
+          createdAt: askedAt,
+        },
         {
           id: uid(),
           conversationId: convId,
           role: "assistant",
           content: JSON.stringify(answer),
+          createdAt: new Date(askedAt.getTime() + 1000),
         },
       ]);
       await log(db, "AI CFO question", args.question.slice(0, 60), user.id);
