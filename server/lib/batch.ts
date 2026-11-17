@@ -148,6 +148,8 @@ export async function loadWorkspacePrelude(
                ai_provider as "aiProvider",
                openrouter_api_key as "openRouterApiKey",
                openrouter_model as "openRouterModel",
+               openai_api_key as "openAiApiKey",
+               openai_model as "openAiModel",
                ai_verified_at at time zone 'UTC' as "aiVerifiedAt",
                ai_verified_provider as "aiVerifiedProvider",
                tour_dismissed as "tourDismissed"
@@ -429,6 +431,8 @@ export async function loadCombinedBatch(
                ai_provider as "aiProvider",
                openrouter_api_key as "openRouterApiKey",
                openrouter_model as "openRouterModel",
+               openai_api_key as "openAiApiKey",
+               openai_model as "openAiModel",
                ai_verified_at at time zone 'UTC' as "aiVerifiedAt",
                ai_verified_provider as "aiVerifiedProvider",
                tour_dismissed as "tourDismissed"
