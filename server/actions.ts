@@ -13,7 +13,8 @@ import { defineAction, z, type ActionsModule } from "./lib/actions";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import * as schema from "./schema";
 import { db, checkDatabase, dbErrorCode } from "./lib/db";
-import { aiComplete, getUserGeminiKey } from "./lib/ai";
+import { aiComplete, getAiSettings, aiExtrasFromRow, asAiProvider, DEFAULT_OPENROUTER_MODEL } from "./lib/ai";
+import type { AiProvider } from "./lib/ai";
 import {
   loadBriefingBatch,
   loadCombinedBatch,
@@ -116,11 +117,11 @@ function asCursorStyle(v: string | null | undefined): CursorStyleT {
 }
 
 /** The account's user_workspace_state row (active mode + cursor style
- *  + saved Gemini key), creating it on first use. getState's prelude
- *  already ensures the row exists via activeMode, so in the normal
- *  path this is exactly one select. cursorStyleOf/geminiKeyOf used
- *  to call activeMode() first and then select this same row again —
- *  two sequential round-trips each, hidden inside getState's
+ *  + saved AI keys/provider), creating it on first use. getState's
+ *  prelude already ensures the row exists via activeMode, so in the
+ *  normal path this is exactly one select. The per-setting readers
+ *  used to call activeMode() first and then select this same row
+ *  again — two sequential round-trips each, hidden inside getState's
  *  "parallel" batch. */
 async function workspaceStateRow(db: Db, ownerId: string) {
   const rows = await db
@@ -201,16 +202,6 @@ async function setTourDismissedRow(db: Db, ownerId: string): Promise<void> {
 // connections status stays "Not connected" until a real Gemini call is
 // wired through a server action and verified.
 
-async function geminiKeyOf(
-  db: Db,
-  ownerId: string,
-): Promise<{ saved: boolean; last4: string }> {
-  const row = await workspaceStateRow(db, ownerId);
-  const key = row?.geminiApiKey ?? null;
-  if (!key) return { saved: false, last4: "" };
-  return { saved: true, last4: key.slice(-4) };
-}
-
 async function setGeminiKeyRow(
   db: Db,
   ownerId: string,
@@ -223,6 +214,59 @@ async function setGeminiKeyRow(
     .onConflictDoUpdate({
       target: schema.userWorkspaceState.ownerId,
       set: { geminiApiKey: key },
+    });
+}
+
+// ---------- OpenRouter provider settings (per account, server-side only) ----------
+// Same vault rules as the Gemini key: the OpenRouter key is stored on
+// the account's state row and NEVER returned to the browser (only
+// saved + last 4 characters). The provider choice and model are plain
+// settings on the same row. Changing the provider, the key, or the
+// model clears the verified flag, so the new configuration must prove
+// itself with a real AI call before Live connections shows it Live.
+
+async function setAiProviderRow(
+  db: Db,
+  ownerId: string,
+  provider: AiProvider,
+): Promise<void> {
+  const mode = await activeMode(db, ownerId);
+  await db
+    .insert(schema.userWorkspaceState)
+    .values({ ownerId, activeMode: mode, aiProvider: provider })
+    .onConflictDoUpdate({
+      target: schema.userWorkspaceState.ownerId,
+      set: { aiProvider: provider, aiVerifiedAt: null, aiVerifiedProvider: null },
+    });
+}
+
+async function setOpenRouterKeyRow(
+  db: Db,
+  ownerId: string,
+  key: string | null,
+): Promise<void> {
+  const mode = await activeMode(db, ownerId);
+  await db
+    .insert(schema.userWorkspaceState)
+    .values({ ownerId, activeMode: mode, openRouterApiKey: key })
+    .onConflictDoUpdate({
+      target: schema.userWorkspaceState.ownerId,
+      set: { openRouterApiKey: key, aiVerifiedAt: null, aiVerifiedProvider: null },
+    });
+}
+
+async function setOpenRouterModelRow(
+  db: Db,
+  ownerId: string,
+  model: string,
+): Promise<void> {
+  const mode = await activeMode(db, ownerId);
+  await db
+    .insert(schema.userWorkspaceState)
+    .values({ ownerId, activeMode: mode, openRouterModel: model })
+    .onConflictDoUpdate({
+      target: schema.userWorkspaceState.ownerId,
+      set: { openRouterModel: model, aiVerifiedAt: null, aiVerifiedProvider: null },
     });
 }
 
@@ -1476,6 +1520,10 @@ export const Actions = {
       cursorStyle: z.enum(["blue", "gradient", "minimal", "mint", "off"]),
       geminiKeySaved: z.boolean(),
       geminiKeyLast4: z.string(),
+      aiProvider: z.enum(["gemini", "openrouter"]),
+      openRouterKeySaved: z.boolean(),
+      openRouterKeyLast4: z.string(),
+      openRouterModel: z.string(),
       workspaces: z.array(
         z.object({
           mode: z.enum(["business", "personal", "creator", "student"]),
@@ -1586,6 +1634,11 @@ export const Actions = {
       const geminiKey = state?.geminiApiKey
         ? { saved: true as const, last4: state.geminiApiKey.slice(-4) }
         : { saved: false as const, last4: "" };
+      const aiProvider = asAiProvider(state?.aiProvider);
+      const openRouterKey = state?.openRouterApiKey
+        ? { saved: true as const, last4: state.openRouterApiKey.slice(-4) }
+        : { saved: false as const, last4: "" };
+      const openRouterModel = state?.openRouterModel || DEFAULT_OPENROUTER_MODEL;
       const tourDismissed = state?.tourDismissed === 1;
       if (!state) {
         await db
@@ -1635,6 +1688,10 @@ export const Actions = {
         cursorStyle,
         geminiKeySaved: geminiKey.saved,
         geminiKeyLast4: geminiKey.last4,
+        aiProvider,
+        openRouterKeySaved: openRouterKey.saved,
+        openRouterKeyLast4: openRouterKey.last4,
+        openRouterModel,
         workspaces: workspaceRows.map((w) => ({
           mode: w.mode,
           name: w.name,
@@ -1929,6 +1986,87 @@ export const Actions = {
       await log(db, "Gemini API key removed", "", user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { ok: true as const, saved: false };
+    },
+  }),
+
+  setAiProvider: defineAction({
+    description:
+      "Switches the signed-in account's AI CFO engine between Gemini and OpenRouter. Switching never touches any record — only which engine the CFO calls — and it clears the verified flag, so the new provider must prove itself with a real call before Live connections shows it Live. Gemini stays the default.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      provider: z.enum(["gemini", "openrouter"]),
+    }),
+    response: z.object({ ok: z.literal(true), provider: z.enum(["gemini", "openrouter"]) }),
+    async handler(ctx, args): Promise<{ ok: true; provider: AiProvider }> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      await setAiProviderRow(db, user.id, args.provider);
+      await log(db, `AI provider switched to ${args.provider === "openrouter" ? "OpenRouter" : "Gemini"}`, "Live connections will show it Live only after a real AI call succeeds", user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true as const, provider: args.provider };
+    },
+  }),
+
+  saveOpenRouterKey: defineAction({
+    description:
+      "Saves the signed-in account's own OpenRouter API key server-side, for OpenRouter AI answers. The key is stored only on the server and is never returned to the browser (the response carries only whether a key is saved and its last 4 characters). Saving a key does NOT connect OpenRouter: the AI CFO keeps answering with the rule-based fallback until a real OpenRouter call succeeds and is verified. Use a FRESH key from openrouter.ai (Keys → Create Key) — never reuse a key that was pasted in chat.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      apiKey: z.string().min(20).max(300),
+    }),
+    response: z.object({
+      ok: z.literal(true),
+      saved: z.boolean(),
+      last4: z.string(),
+    }),
+    async handler(ctx, args): Promise<{ ok: true; saved: boolean; last4: string }> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const key = args.apiKey.trim();
+      if (/\s/.test(key)) {
+        throw new Error("That doesn't look like an API key — it contains spaces. Copy the full key from openrouter.ai → Keys and try again.");
+      }
+      await setOpenRouterKeyRow(db, user.id, key);
+      await log(db, "OpenRouter API key saved", "Stored server-side; OpenRouter is not live yet — it is marked Live only after a real OpenRouter call succeeds", user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true as const, saved: true, last4: key.slice(-4) };
+    },
+  }),
+
+  removeOpenRouterKey: defineAction({
+    description:
+      "Removes the signed-in account's saved OpenRouter API key from the server. The AI CFO falls back to the rule-based answers until another key is saved.",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({ ok: z.literal(true), saved: z.boolean() }),
+    async handler(ctx, args): Promise<{ ok: true; saved: boolean }> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      await setOpenRouterKeyRow(db, user.id, null);
+      await log(db, "OpenRouter API key removed", "", user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true as const, saved: false };
+    },
+  }),
+
+  setOpenRouterModel: defineAction({
+    description:
+      "Sets the OpenRouter model id used when OpenRouter is the selected AI provider. Free models end in :free (e.g. google/gemma-4-31b-it:free) and cost nothing, capped at 50 requests a day without credits; a paid model id such as openai/gpt-4o-mini works through the same endpoint when the account has credits. Changing the model clears the verified flag, so the new model must prove itself with a real call.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      model: z.string().min(3).max(120),
+    }),
+    response: z.object({ ok: z.literal(true), model: z.string() }),
+    async handler(ctx, args): Promise<{ ok: true; model: string }> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const model = args.model.trim();
+      if (/\s/.test(model) || !/^[A-Za-z0-9][A-Za-z0-9._\-/:]*$/.test(model)) {
+        throw new Error("That doesn't look like a model id — use the exact id from openrouter.ai/models, e.g. google/gemma-4-31b-it:free.");
+      }
+      await setOpenRouterModelRow(db, user.id, model);
+      await log(db, `OpenRouter model set to ${model}`, "Live connections will show it Live only after a real call with this model succeeds", user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true as const, model };
     },
   }),
 
@@ -3668,7 +3806,7 @@ export const Actions = {
               images: [{ dataBase64: args.imageBase64!, mimeType: args.imageMimeType ?? "image/jpeg", caption: "Uploaded payment screenshot claim" }],
               schema: imageOutShape,
             },
-            { geminiKey: await getUserGeminiKey(user.id) },
+            await getAiSettings(user.id),
           );
         } catch {
           imageFindings = null;
@@ -4344,7 +4482,7 @@ export const Actions = {
             points: z.array(z.string()).min(1).max(5),
           }),
         },
-        { geminiKey: state?.geminiApiKey ?? null },
+        aiExtrasFromRow(state, user.id),
       );
       return {
         headline: result.headline,
@@ -4568,7 +4706,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
             assumptions: z.string(),
           }),
         },
-        { geminiKey: await getUserGeminiKey(user.id) },
+        await getAiSettings(user.id),
       );
       const answer = { ...rawAnswer, sources, language };
       let convId = args.conversationId;
@@ -4979,13 +5117,13 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
 
   getIntegrationStatus: defineAction({
     description:
-      "Reports the live connection status of each integration, verified server-side at call time: the workspace database is probed with a real read of the signed-in account's business row, the AI engine is probed with a real one-word inference call, and Supabase / Google sign-in are probed against the connected Supabase project's real Auth settings — Google sign-in shows Live only when Supabase itself reports the Google provider enabled. Gemini and bank/UPI sync have no connection wired, so they are honestly reported as not connected, with what is needed to connect them.",
+      "Reports the live connection status of each integration, verified server-side at call time: the workspace database is probed with a real read of the signed-in account's business row, and Supabase / Google sign-in are probed against the connected Supabase project's real Auth settings — Google sign-in shows Live only when Supabase itself reports the Google provider enabled. An AI engine (Gemini or OpenRouter, whichever the account selected in Settings) shows Live only when a real AI call with that provider has actually succeeded — recorded on the account row by the call itself; a saved key alone is never shown as live. Bank/UPI sync has no connection wired, so it is honestly reported as not connected, with what is needed to connect it.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       checkedAt: z.string(),
       services: z.array(
         z.object({
-          id: z.enum(["database", "ai", "supabase", "gemini", "bank_upi_sync", "google_signin"]),
+          id: z.enum(["database", "ai", "supabase", "gemini", "openrouter", "bank_upi_sync", "google_signin"]),
           name: z.string(),
           status: z.enum(["live", "not_connected"]),
           detail: z.string(),
@@ -5015,18 +5153,41 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         dbLive = false;
       }
 
-      // Real probe 2: the AI engine is live only when a Gemini key is
-      // configured — either the server GEMINI_API_KEY or this account's
-      // saved key. Without one, the AI CFO answers with the honest
-      // rule-based fallback, which is not an AI model and is not shown
-      // as live.
-      let aiLive = false;
-      try {
-        const userKey = await getUserGeminiKey(user.id);
-        aiLive = !!(userKey || process.env.GEMINI_API_KEY);
-      } catch {
-        aiLive = false;
-      }
+      // Real probe 2: the AI engine is Live only when a real AI call
+      // with the SELECTED provider has succeeded — aiComplete records
+      // that on the account row (ai_verified_at / ai_verified_provider).
+      // A saved key alone is never Live: the user's Gemini key, for
+      // example, is saved but every call fails with HTTP 403 "free
+      // tier is not available for this project", so Gemini stays Not
+      // connected. One state-row read gives provider, keys, model and
+      // the verified flag together.
+      const aiRow = await workspaceStateRow(db, user.id);
+      const aiProvider = asAiProvider(aiRow?.aiProvider);
+      const aiEngineName = aiProvider === "openrouter" ? "OpenRouter" : "Gemini";
+      const aiVerifiedAt = aiRow?.aiVerifiedAt ?? null;
+      const aiVerified =
+        aiRow?.aiVerifiedProvider === aiProvider && aiVerifiedAt != null;
+      const aiVerifiedWhen = aiVerifiedAt
+        ? aiVerifiedAt.toLocaleString("en-IN", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "";
+      const geminiSaved = !!aiRow?.geminiApiKey;
+      const geminiLast4 = aiRow?.geminiApiKey
+        ? aiRow.geminiApiKey.slice(-4)
+        : "";
+      const orSaved = !!aiRow?.openRouterApiKey;
+      const orLast4 = aiRow?.openRouterApiKey
+        ? aiRow.openRouterApiKey.slice(-4)
+        : "";
+      const orModel = aiRow?.openRouterModel || DEFAULT_OPENROUTER_MODEL;
+      const geminiVerified =
+        aiRow?.aiVerifiedProvider === "gemini" && aiVerifiedAt != null;
+      const orVerified =
+        aiRow?.aiVerifiedProvider === "openrouter" && aiVerifiedAt != null;
 
       // Real probe 3: Supabase Auth settings for the connected
       // project — Google sign-in is Live only when Supabase itself
@@ -5046,11 +5207,21 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
           {
             id: "ai" as const,
             name: "AI CFO engine",
-            status: aiLive ? ("live" as const) : ("not_connected" as const),
-            detail: aiLive
-              ? "Live — the AI CFO and daily briefing are generated by Gemini (free tier), fed only with figures calculated from your own records."
-              : "No Gemini key is configured, so the AI CFO answers with the built-in rule-based fallback (exact figures from your records, no model). Add a free Gemini API key in Settings to enable AI answers.",
-            needed: "",
+            status: aiVerified ? ("live" as const) : ("not_connected" as const),
+            detail: aiVerified
+              ? `Live — verified by a real ${aiEngineName} call on ${aiVerifiedWhen}: the AI CFO and daily briefing are generated by ${aiEngineName}${aiProvider === "openrouter" ? ` (${orModel})` : " (free tier)"}, fed only with figures calculated from your own records.`
+              : aiProvider === "openrouter"
+                ? orSaved
+                  ? `Not connected yet — an OpenRouter API key is saved securely on the server for your account (ending ••••${orLast4}), but no OpenRouter call has succeeded yet, so the AI CFO still answers with the built-in rule-based fallback, not with OpenRouter. A saved key alone is never shown as "live".`
+                  : "No OpenRouter key is configured, so the AI CFO answers with the built-in rule-based fallback (exact figures from your records, no model). Add a free OpenRouter API key in Settings to enable AI answers."
+                : geminiSaved
+                  ? `Not connected yet — a Gemini API key is saved securely on the server for your account (ending ••••${geminiLast4}), but no Gemini call has succeeded yet, so the AI CFO still answers with the built-in rule-based fallback, not with Gemini. A saved key alone is never shown as "live".`
+                  : "No Gemini key is configured, so the AI CFO answers with the built-in rule-based fallback (exact figures from your records, no model). Add a free Gemini API key in Settings to enable AI answers.",
+            needed: aiVerified
+              ? ""
+              : aiProvider === "openrouter"
+                ? "To connect: get a free OpenRouter API key from openrouter.ai (Keys → Create Key — no payment needed for :free models) and save it in Settings → “OpenRouter API key” on this page, or set OPENROUTER_API_KEY in Vercel. Free models are capped at 50 requests a day."
+                : "To connect: get a free Gemini API key from Google AI Studio and save it in Settings → “Gemini API key” on this page, or set GEMINI_API_KEY in Vercel. Note: Google currently blocks the free tier for some accounts (HTTP 403 “free tier is not available for this project”) — if that happens to you, switch the AI provider to OpenRouter in Settings.",
           },
           {
             id: "supabase" as const,
@@ -5086,12 +5257,30 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
           {
             id: "gemini" as const,
             name: "Google Gemini",
-            status: "not_connected" as const,
-            detail: (await geminiKeyOf(db, user.id)).saved
-              ? `Not connected yet — a Gemini API key is saved securely on the server for your account (ending ••••${(await geminiKeyOf(db, user.id)).last4}), but no Gemini call has been verified yet, so the AI CFO still answers with the built-in rule-based fallback, not with Gemini. A saved key alone is never shown as "live".`
-              : "Not connected — no Gemini API key is configured for this workspace, so the AI CFO answers with the built-in rule-based fallback, not with Gemini.",
+            status: geminiVerified ? ("live" as const) : ("not_connected" as const),
+            detail: geminiVerified
+              ? `Live — a real Gemini call succeeded on ${aiVerifiedWhen}, so the AI CFO answers with Gemini.`
+              : geminiSaved
+                ? `Not connected yet — a Gemini API key is saved securely on the server for your account (ending ••••${geminiLast4}), but no Gemini call has been verified yet, so the AI CFO still answers with the built-in rule-based fallback, not with Gemini. A saved key alone is never shown as "live".`
+                : aiProvider === "openrouter"
+                  ? "Not connected — Gemini is not the selected AI provider (OpenRouter is), and no Gemini key is configured for this workspace, so the AI CFO answers with the built-in rule-based fallback, not with Gemini."
+                  : "Not connected — no Gemini API key is configured for this workspace, so the AI CFO answers with the built-in rule-based fallback, not with Gemini.",
             needed:
               "To connect: get a free Gemini API key from Google AI Studio and save it in Settings → “Gemini API key” on this page, or set GEMINI_API_KEY in Vercel — it is stored server-side only and never shown again. Gemini is marked Live only after a real Gemini call succeeds; until then this status stays Not connected, honestly.",
+          },
+          {
+            id: "openrouter" as const,
+            name: "OpenRouter",
+            status: orVerified ? ("live" as const) : ("not_connected" as const),
+            detail: orVerified
+              ? `Live — a real OpenRouter call with model ${orModel} succeeded on ${aiVerifiedWhen}, so the AI CFO answers with OpenRouter.`
+              : orSaved
+                ? `Not connected yet — an OpenRouter API key is saved securely on the server for your account (ending ••••${orLast4}), but no OpenRouter call has been verified yet, so the AI CFO still answers with the built-in rule-based fallback, not with OpenRouter. A saved key alone is never shown as "live".`
+                : aiProvider === "gemini"
+                  ? "Not connected — OpenRouter is not the selected AI provider (Gemini is), and no OpenRouter key is configured for this workspace, so the AI CFO answers with the built-in rule-based fallback, not with OpenRouter."
+                  : "Not connected — no OpenRouter API key is configured for this workspace, so the AI CFO answers with the built-in rule-based fallback, not with OpenRouter.",
+            needed:
+              "To connect: get a free OpenRouter API key from openrouter.ai (Keys → Create Key — no payment needed for :free models) and save it in Settings → “OpenRouter API key” on this page, or set OPENROUTER_API_KEY in Vercel — it is stored server-side only and never shown again. Free :free models cost nothing and are capped at 50 requests a day. OpenRouter is marked Live only after a real OpenRouter call succeeds; until then this status stays Not connected, honestly.",
           },
         ],
       };
