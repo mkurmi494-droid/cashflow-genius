@@ -1909,15 +1909,19 @@ export function App() {
         </div>
       ) : null}
 
-      {/* Quick Note FAB (mobile / always available) */}
-      <button
-        type="button"
-        className="no-print btn-primary fixed bottom-24 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full text-xl shadow-[0_14px_30px_rgba(124,58,237,0.32)] lg:bottom-6"
-        aria-label="Open Quick Note"
-        onClick={() => setQuickOpen(true)}
-      >
-        ✎
-      </button>
+      {/* Quick Note FAB (mobile / always available) — hidden on the AI CFO
+          page, where the pinned question box owns the bottom of the screen
+          and the FAB would float over it. */}
+      {route !== "ai-cfo" ? (
+        <button
+          type="button"
+          className="no-print btn-primary fixed bottom-24 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full text-xl shadow-[0_14px_30px_rgba(124,58,237,0.32)] lg:bottom-6"
+          aria-label="Open Quick Note"
+          onClick={() => setQuickOpen(true)}
+        >
+          ✎
+        </button>
+      ) : null}
 
       {quickOpen ? <QuickNote onClose={() => setQuickOpen(false)} notify={notify} /> : null}
       {quickAddOpen ? (
