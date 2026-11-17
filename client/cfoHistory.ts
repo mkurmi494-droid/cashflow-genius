@@ -199,6 +199,54 @@ function extractJsonStringField(text: string, keys: string[]): string | null {
   return null;
 }
 
+/** Pull a JSON array field out of text that looks like JSON but
+ *  would not parse (for example a reply cut off mid-way at the old
+ *  4000-character free-text cap): find "key", scan to the matching
+ *  "]" respecting strings, and parse just that array. Returns null
+ *  when the field or a complete array is not there. */
+function extractJsonArrayField(text: string, keys: string[]): unknown[] | null {
+  for (const key of keys) {
+    const idx = text.indexOf(`"${key}"`);
+    if (idx < 0) continue;
+    const colon = text.indexOf(":", idx + key.length + 2);
+    if (colon < 0) continue;
+    let i = colon + 1;
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (text[i] !== "[") continue;
+    let depth = 0;
+    let inString = false;
+    let j = i;
+    for (; j < text.length; j++) {
+      const ch = text[j]!;
+      if (inString) {
+        if (ch === "\\") {
+          j++;
+          continue;
+        }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "[") depth++;
+      if (ch === "]") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (depth !== 0) continue;
+    try {
+      const parsed = JSON.parse(text.slice(i, j + 1));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      /* not a parseable array — try the next key */
+    }
+  }
+  return null;
+}
+
 /** Last resort for JSON-looking text that yielded nothing else: join
  *  every string value in the object, so the user sees prose, never
  *  raw JSON syntax. */
@@ -302,6 +350,19 @@ export function parseStoredAnswer(content: string): CfoHistoryAnswer | null {
     } else {
       return null;
     }
+  }
+  // Truncated stored JSON (cut off mid-way by the old 4000-character
+  // free-text cap) can still carry its key-numbers array complete —
+  // it sits right after direct_answer, before the cut. Salvage it so
+  // the re-opened conversation shows its numbers grid too, not just
+  // the prose. Only when nothing else supplied numbers.
+  if (numbers.length === 0 && trimmed.startsWith("{")) {
+    const salvagedNumbers = extractJsonArrayField(trimmed, [
+      "key_numbers",
+      "keyNumbers",
+      "numbers",
+    ]);
+    if (salvagedNumbers) numbers = asNumberArray(salvagedNumbers);
   }
   return {
     directAnswer: direct,
