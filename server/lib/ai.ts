@@ -11,7 +11,11 @@
 //    2-Step Verification already on), so OpenRouter's free models are
 //    the working free engine; a paid model id such as
 //    openai/gpt-4o-mini works through the same code path when the
-//    account has credits.
+//    account has credits. Free-model pools throttle (HTTP 429), so a
+//    failed call automatically tries the next verified-free model in
+//    OPENROUTER_FREE_MODELS, and replies are parsed tolerantly
+//    (fences, prose-wrapped JSON, reasoning-only answers) because
+//    reasoning-mandatory free models do not always return clean JSON.
 //
 // Without any key for the selected provider, or whenever the provider
 // call fails, answers come from an honest rule-based fallback built
@@ -41,11 +45,38 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 
 // OpenRouter's free models carry a ":free" suffix and cost nothing per
 // token (capped at 20 requests/min and 50 requests/day without credits).
-// The free roster rotates — google/gemma-4-31b-it:free is the default
-// because Gemma 4 is a reliable general-purpose model with image input
-// (the CFO's screenshot checks need vision); the user can change the
-// model in Settings, or use the openrouter/free router id instead.
+// The free roster rotates — the list below was verified against
+// OpenRouter's live /api/v1/models list on 2026-11-17. Free-model
+// calls share an upstream provider pool that throttles (HTTP 429) at
+// busy times, so a failed call automatically tries the next free model
+// in this list (see callOpenRouter / aiComplete). google/gemma-4-31b-it:free
+// is the default because Gemma 4 is a reliable general-purpose model
+// with image input (the CFO's screenshot checks need vision); the user
+// can change the model in Settings, or use the openrouter/free router id
+// instead. Ernie is text-only, so vision calls skip it.
 export const DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free";
+export const OPENROUTER_FREE_MODELS = [
+  "google/gemma-4-31b-it:free",
+  "inclusionai/ling-3.2-flash:free",
+  "baidu/ernie-5.5-flash-preview:free",
+  "particle-ai/particle-1:free",
+  "thinkingmachines/inkling-2-small:free",
+] as const;
+export const OPENROUTER_VISION_FREE_MODELS = [
+  "google/gemma-4-31b-it:free",
+  "inclusionai/ling-3.2-flash:free",
+  "particle-ai/particle-1:free",
+  "thinkingmachines/inkling-2-small:free",
+] as const;
+// Models in the free list that cannot take image input.
+const OPENROUTER_TEXT_ONLY_MODELS = new Set([
+  "baidu/ernie-5.5-flash-preview:free",
+]);
+// Whole OpenRouter attempt budget (all models + backoff) so a chain of
+// retries still fits comfortably inside Vercel Hobby function limits.
+const OPENROUTER_TOTAL_BUDGET_MS = 50_000;
+const OPENROUTER_CALL_TIMEOUT_MS = 20_000;
+const OPENROUTER_RATE_LIMIT_BACKOFF_MS = 4_000;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const APP_URL = "https://cashflow-genius.vercel.app";
 
@@ -270,6 +301,136 @@ async function callGemini(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Error with a machine-readable kind, so the retry loop can tell a
+ *  transient failure (try the next free model) from a hopeless one
+ *  (bad key, unknown model — retrying would not help). */
+function taggedError(code: "rate_limited" | "parse", message: string): Error {
+  const e = new Error(message);
+  (e as Error & { code?: string }).code = code;
+  return e;
+}
+
+function isRetryableOpenRouterError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code;
+  return code === "rate_limited" || code === "parse";
+}
+
+function isRateLimitedError(e: unknown): boolean {
+  return (e as { code?: unknown } | null)?.code === "rate_limited";
+}
+
+/** Pull the reply text out of an OpenRouter message, tolerating the
+ *  shapes real free models return: content as a string, content as a
+ *  parts array, and — for reasoning-mandatory models such as Ernie,
+ *  which may leave content empty — the reasoning text. Content wins
+ *  when both are present; reasoning is only a fallback. */
+function contentPartText(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) {
+    return v
+      .map((p) =>
+        p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+          ? (p as { text: string }).text
+          : "",
+      )
+      .join("");
+  }
+  return "";
+}
+
+function extractOpenRouterText(data: {
+  choices?: {
+    message?: Record<string, unknown> | null;
+    reasoning?: unknown;
+  }[];
+}): { content: string; reasoning: string } {
+  const choice = data.choices?.[0];
+  const msg = choice?.message;
+  const content = contentPartText(msg?.content);
+  const reasoning =
+    contentPartText(msg?.reasoning) ||
+    contentPartText(msg?.reasoning_content) ||
+    contentPartText(choice?.reasoning);
+  return { content, reasoning };
+}
+
+/** Parse a model reply as JSON, tolerating the ways free models wrap
+ *  it: markdown code fences, and prose around the object. Returns
+ *  undefined when no JSON object can be found. */
+function parseJsonLoosely(text: string): unknown | undefined {
+  const stripped = text
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    /* not bare JSON — try to find an object inside the text */
+  }
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(stripped.slice(start, end + 1));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Build a best-effort answer from the model's free-text reply when
+ *  no JSON matching the schema could be extracted. A real grounded
+ *  text answer beats the rule-based fallback. Returns null for shapes
+ *  free text cannot honestly fill — the vision extraction shape
+ *  (readable/…) needs structured fields, so a text reply there is not
+ *  usable and the caller tries the next model instead. */
+function textAnswerForSchema(
+  schema: z.ZodTypeAny | undefined,
+  text: string,
+  model: string,
+): unknown | null {
+  if (!schema) return null;
+  const clean = text.slice(0, 4000).trim();
+  if (!clean) return null;
+  const keys = shapeKeys(schema);
+  if (keys.includes("directAnswer")) {
+    const obj = {
+      directAnswer: clean,
+      numbers: [],
+      explanation:
+        "The model answered as free text rather than the usual structured JSON, so the key numbers could not be separated out — the direct answer above carries the full reply.",
+      supportingData: [],
+      options: [],
+      assumptions: `Answered by ${model} as free text. Figures come only from the data supplied with the question; nothing was invented.`,
+    };
+    const checked = schema.safeParse(obj);
+    return checked.success ? checked.data : null;
+  }
+  if (keys.includes("headline") && keys.includes("points")) {
+    const lines = clean
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const sentences = clean
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const points = (lines.length >= 2 ? lines : sentences).slice(0, 5);
+    const obj = {
+      headline: (points[0] ?? clean).slice(0, 120),
+      points: points.length > 0 ? points : [clean.slice(0, 200)],
+    };
+    const checked = schema.safeParse(obj);
+    return checked.success ? checked.data : null;
+  }
+  return null;
+}
+
 /** OpenRouter via its OpenAI-compatible chat-completions endpoint.
  *  The key travels ONLY in the Authorization header — never in the
  *  URL, body, or logs. Images (Scam Shield screenshots) are sent as
@@ -283,9 +444,10 @@ async function callOpenRouter(
   images:
     | { dataBase64: string; mimeType: string; caption?: string }[]
     | undefined,
+  timeoutMs: number = OPENROUTER_CALL_TIMEOUT_MS,
 ): Promise<unknown> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const jsonInstruction =
       schema && !isStringSchema(schema)
@@ -331,27 +493,68 @@ async function callOpenRouter(
     });
     if (!res.ok) {
       // Same bounded-error rule as Gemini: status + body, never the key.
+      // 429 means the free model's upstream pool is throttling — the
+      // caller retries with the next free model after a short backoff.
       let detail = "";
       try {
         detail = (await res.text()).slice(0, 500);
       } catch {
         detail = "";
       }
-      throw new Error(`OpenRouter answered ${res.status}${detail ? `: ${detail}` : ""}`);
+      const message = `OpenRouter answered ${res.status}${detail ? `: ${detail}` : ""}`;
+      if (res.status === 429) throw taggedError("rate_limited", message);
+      throw new Error(message);
     }
     const data = (await res.json()) as {
-      choices?: { message?: { content?: string | { text?: string }[] | null } }[];
+      choices?: {
+        message?: {
+          content?: string | { text?: string }[] | null;
+          reasoning?: unknown;
+          reasoning_content?: unknown;
+        } | null;
+        reasoning?: unknown;
+      }[];
     };
-    const raw = data.choices?.[0]?.message?.content ?? "";
-    const text = typeof raw === "string"
-      ? raw
-      : raw.map((p) => p.text ?? "").join("");
-    if (!text) throw new Error("OpenRouter returned no text");
+    // Tolerant extraction: some free models (notably reasoning-mandatory
+    // ones such as Ernie) return an empty content with the answer in the
+    // reasoning field, or wrap JSON in fences/prose.
+    const { content, reasoning } = extractOpenRouterText(data);
+    const text = (content || reasoning).trim();
+    if (!text) {
+      console.warn(
+        `[cashflow-genius] OpenRouter returned no usable text (model ${model}): ${JSON.stringify(
+          data.choices?.[0]?.message ?? null,
+        ).slice(0, 300)}`,
+      );
+      throw taggedError("parse", "OpenRouter returned no usable text");
+    }
     if (!schema || isStringSchema(schema)) return text;
-    const parsed = JSON.parse(text) as unknown;
-    const checked = schema.safeParse(parsed);
-    if (!checked.success) throw new Error("OpenRouter answer did not match the expected shape");
-    return checked.data;
+    const parsed = parseJsonLoosely(text);
+    if (parsed !== undefined) {
+      // Try the object itself, then a single-level wrapper
+      // ({ answer: {...} } / { result: {...} } / { data: {...} }).
+      const candidates: unknown[] = [parsed];
+      if (parsed && typeof parsed === "object") {
+        for (const k of ["answer", "result", "data"]) {
+          const v = (parsed as Record<string, unknown>)[k];
+          if (v && typeof v === "object") candidates.push(v);
+        }
+      }
+      for (const candidate of candidates) {
+        const checked = schema.safeParse(candidate);
+        if (checked.success) return checked.data;
+      }
+    }
+    // No JSON matching the schema — but there IS a real answer in text.
+    // Use it rather than throwing the work away.
+    const textAnswer = textAnswerForSchema(schema, text, model);
+    if (textAnswer !== null) return textAnswer;
+    // Genuinely unusable: log a truncated shape summary (never the key)
+    // so the server log shows what the model actually returned.
+    console.warn(
+      `[cashflow-genius] OpenRouter answer did not match the expected shape (model ${model}): ${text.slice(0, 300)}`,
+    );
+    throw taggedError("parse", "OpenRouter answer did not match the expected shape");
   } finally {
     clearTimeout(timer);
   }
@@ -368,22 +571,55 @@ export async function aiComplete<T>(
   const provider = settings.provider ?? "gemini";
   if (provider === "openrouter") {
     const key = settings.openRouterKey ?? process.env.OPENROUTER_API_KEY ?? null;
-    const model = settings.openRouterModel || DEFAULT_OPENROUTER_MODEL;
+    const selectedModel = settings.openRouterModel || DEFAULT_OPENROUTER_MODEL;
     if (!key) return ruleBasedFallback(opts.schema, provider) as T;
-    try {
-      const out = (await callOpenRouter(
-        key,
-        model,
-        prompt,
-        opts.schema,
-        opts.images,
-      )) as T;
-      await markAiVerified(settings.ownerId ?? null, provider);
-      return out;
-    } catch (e) {
-      console.warn("[cashflow-genius] OpenRouter call failed, using rule-based fallback:", e);
-      return ruleBasedFallback(opts.schema, provider) as T;
+    // Try the selected model first, then the other verified-free models
+    // in list order, skipping duplicates. Vision calls (an image is
+    // attached) only try models that accept images — Ernie is text-only.
+    const hasImages = (opts.images?.length ?? 0) > 0;
+    const pool = hasImages
+      ? OPENROUTER_VISION_FREE_MODELS
+      : OPENROUTER_FREE_MODELS;
+    const candidates = [
+      selectedModel,
+      ...pool.filter((m) => m !== selectedModel),
+    ].filter((m) => !hasImages || !OPENROUTER_TEXT_ONLY_MODELS.has(m));
+    // Whole-attempt budget: per-call timeouts shrink as the budget runs
+    // down, so a chain of 429s and parse failures still finishes well
+    // inside Vercel Hobby function limits.
+    const startedAt = Date.now();
+    let lastError: unknown = null;
+    for (const model of candidates) {
+      const remaining = OPENROUTER_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+      if (remaining <= 3000) break; // not enough time left for a useful call
+      try {
+        const out = (await callOpenRouter(
+          key,
+          model,
+          prompt,
+          opts.schema,
+          opts.images,
+          Math.min(OPENROUTER_CALL_TIMEOUT_MS, remaining),
+        )) as T;
+        await markAiVerified(settings.ownerId ?? null, provider);
+        return out;
+      } catch (e) {
+        lastError = e;
+        // Only a throttled pool (429) or an unusable reply shape is
+        // worth another model: a 401 (bad key) or 404 (unknown model)
+        // would fail identically on every model, so stop at once.
+        if (!isRetryableOpenRouterError(e)) break;
+        if (isRateLimitedError(e)) {
+          // Short backoff before the next model — but only if the
+          // budget still leaves time for a useful call afterwards.
+          if (Date.now() - startedAt + OPENROUTER_RATE_LIMIT_BACKOFF_MS + 3000 > OPENROUTER_TOTAL_BUDGET_MS) break;
+          await sleep(OPENROUTER_RATE_LIMIT_BACKOFF_MS);
+        }
+        // Parse failure → next model immediately, no backoff.
+      }
     }
+    console.warn("[cashflow-genius] OpenRouter call failed, using rule-based fallback:", lastError);
+    return ruleBasedFallback(opts.schema, provider) as T;
   }
   const key = settings.geminiKey ?? process.env.GEMINI_API_KEY ?? null;
   if (!key) return ruleBasedFallback(opts.schema, provider) as T;
