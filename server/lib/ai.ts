@@ -1,6 +1,6 @@
 // AI CFO engine for the Vercel port — replaces ctx.inference.
 //
-// Two providers, chosen per account in Settings (default: Gemini):
+// Three providers, chosen per account in Settings (default: Gemini):
 //  - Gemini (Google AI Studio key, gemini-3.8-flash, free tier) — the
 //    account's own saved key first, then the server GEMINI_API_KEY.
 //  - OpenRouter (OpenRouter key, any model id — default a free :free
@@ -16,6 +16,13 @@
 //    OPENROUTER_FREE_MODELS, and replies are parsed tolerantly
 //    (fences, prose-wrapped JSON, reasoning-only answers) because
 //    reasoning-mandatory free models do not always return clean JSON.
+//  - OpenAI (ChatGPT) — the account's own OpenAI key, direct
+//    api.openai.com chat-completions endpoint, default gpt-4o-mini.
+//    No free tier: usage is billed to the key owner's OpenAI account.
+//    One model, one attempt — the paid API is reliable, so no
+//    fallback chain; any failure falls back honestly, exactly like
+//    Gemini. The key is stored server-side only and is never logged
+//    or returned; use a FRESH key, never one pasted in chat.
 //    One shape is never shown, though: a reasoning trace — the model
 //    thinking out loud about producing JSON ("We need answer user's
 //    request. Need produce final only valid JSON...") without ever
@@ -44,10 +51,12 @@ import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { userWorkspaceState } from "../schema";
 
-export type AiProvider = "gemini" | "openrouter";
+export type AiProvider = "gemini" | "openrouter" | "openai";
 
 export function asAiProvider(v: string | null | undefined): AiProvider {
-  return v === "openrouter" ? "openrouter" : "gemini";
+  if (v === "openrouter") return "openrouter";
+  if (v === "openai") return "openai";
+  return "gemini";
 }
 
 // gemini-2.0-flash was shut down by Google on 1 Jun 2026, so every call
@@ -103,11 +112,22 @@ const OPENROUTER_RATE_LIMIT_BACKOFF_MS = 4_000;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const APP_URL = "https://cashflow-genius.vercel.app";
 
+// OpenAI (ChatGPT), direct endpoint. gpt-4o-mini is the default:
+// cheap, fast, vision-capable (the CFO's screenshot checks need
+// image input) and JSON-mode capable. One attempt with a generous
+// timeout — the paid API is reliable, so there is no fallback chain;
+// a failure falls back honestly to the rule-based answers.
+export const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const OPENAI_CALL_TIMEOUT_MS = 30_000;
+
 export interface AiCallSettings {
   provider: AiProvider;
   geminiKey: string | null;
   openRouterKey: string | null;
   openRouterModel: string;
+  openAiKey: string | null;
+  openAiModel: string;
   ownerId: string | null;
 }
 
@@ -119,6 +139,8 @@ export function aiExtrasFromRow(
     geminiApiKey?: string | null;
     openRouterApiKey?: string | null;
     openRouterModel?: string | null;
+    openAiApiKey?: string | null;
+    openAiModel?: string | null;
   } | null,
   ownerId: string,
 ): AiCallSettings {
@@ -128,6 +150,8 @@ export function aiExtrasFromRow(
     openRouterKey:
       row?.openRouterApiKey ?? process.env.OPENROUTER_API_KEY ?? null,
     openRouterModel: row?.openRouterModel || DEFAULT_OPENROUTER_MODEL,
+    openAiKey: row?.openAiApiKey ?? process.env.OPENAI_API_KEY ?? null,
+    openAiModel: row?.openAiModel || DEFAULT_OPENAI_MODEL,
     ownerId,
   };
 }
@@ -162,6 +186,21 @@ export async function getUserGeminiKey(
   }
 }
 
+export async function getUserOpenAiKey(
+  ownerId: string,
+): Promise<string | null> {
+  try {
+    const rows = await db
+      .select()
+      .from(userWorkspaceState)
+      .where(eq(userWorkspaceState.ownerId, ownerId))
+      .limit(1);
+    return rows[0]?.openAiApiKey ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort record that a real AI call just succeeded with this
  *  provider, so Live connections can honestly show it Live. Never
  *  throws and never blocks the answer. */
@@ -191,8 +230,16 @@ function shapeKeys(schema: z.ZodTypeAny): string[] {
 }
 
 function isStringSchema(schema: z.ZodTypeAny): boolean {
-  return (schema as unknown as { _def?: { typeName?: string } })._def
-    ?.typeName === "ZodString";
+  // zod v3 stored the name in _def.typeName ("ZodString"); zod v4
+  // uses _zod.def.type ("string") and _def.typeName is undefined.
+  // instanceof covers both versions, so a plain-text answer is
+  // returned as-is instead of being forced through JSON parsing
+  // (which threw it away and fell back to null).
+  return (
+    schema instanceof z.ZodString ||
+    (schema as unknown as { _def?: { typeName?: string } })._def
+      ?.typeName === "ZodString"
+  );
 }
 
 /** Deterministic fallback used when no key is configured for the
@@ -205,7 +252,12 @@ function ruleBasedFallback(
   if (!schema) return null;
   if (isStringSchema(schema)) return "ready";
   const keys = shapeKeys(schema);
-  const engine = provider === "openrouter" ? "OpenRouter" : "Gemini";
+  const engine =
+    provider === "openrouter"
+      ? "OpenRouter"
+      : provider === "openai"
+        ? "OpenAI"
+        : "Gemini";
   if (keys.includes("directAnswer")) {
     return {
       directAnswer:
@@ -214,7 +266,9 @@ function ruleBasedFallback(
       explanation:
         provider === "openrouter"
           ? "Check Settings → Live connections for the OpenRouter status. If no key is saved, add a free OpenRouter API key there (openrouter.ai — free :free models, no payment needed) or set OPENROUTER_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or OpenRouter's service. Free models are capped at 50 requests a day."
-          : "Check Settings → Live connections for the Gemini status. If no key is saved, add a free Gemini API key there (Google AI Studio, free tier) or set GEMINI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or Google's service.",
+          : provider === "openai"
+            ? "Check Settings → Live connections for the OpenAI status. If no key is saved, add an OpenAI API key there (platform.openai.com → API keys — usage is billed to your OpenAI account) or set OPENAI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or OpenAI's service (for example, insufficient credits)."
+            : "Check Settings → Live connections for the Gemini status. If no key is saved, add a free Gemini API key there (Google AI Studio, free tier) or set GEMINI_API_KEY in Vercel. If a key is already saved and this keeps happening, the AI call itself is failing — the key, the model, or Google's service.",
       supportingData: [],
       options: [
         `Check the ${engine} status in Settings → Live connections.`,
@@ -233,10 +287,15 @@ function ruleBasedFallback(
               "Set a free OpenRouter API key in Settings → Live connections to get daily AI briefings. Free :free models cost nothing and are capped at 50 requests a day.",
               "Your cash, invoices and savings are still up to date on the dashboard.",
             ]
-          : [
-              "Set a free Gemini API key in Settings → Live connections to get daily AI briefings.",
-              "Your cash, invoices and savings are still up to date on the dashboard.",
-            ],
+          : provider === "openai"
+            ? [
+                "Set an OpenAI API key in Settings → Live connections to get daily AI briefings. Usage is billed to your OpenAI account — gpt-4o-mini costs a few paise per question.",
+                "Your cash, invoices and savings are still up to date on the dashboard.",
+              ]
+            : [
+                "Set a free Gemini API key in Settings → Live connections to get daily AI briefings.",
+                "Your cash, invoices and savings are still up to date on the dashboard.",
+              ],
     };
   }
   if (keys.includes("readable")) {
@@ -349,11 +408,12 @@ function isRateLimitedError(e: unknown): boolean {
   return (e as { code?: unknown } | null)?.code === "rate_limited";
 }
 
-/** Pull the reply text out of an OpenRouter message, tolerating the
- *  shapes real free models return: content as a string, content as a
- *  parts array, and — for reasoning-mandatory models such as Ernie,
- *  which may leave content empty — the reasoning text. Content wins
- *  when both are present; reasoning is only a fallback. */
+/** Pull the reply text out of a chat-completions message (OpenRouter
+ *  and OpenAI share the shape), tolerating the shapes real models
+ *  return: content as a string, content as a parts array, and — for
+ *  reasoning-mandatory models such as Ernie, which may leave content
+ *  empty — the reasoning text. Content wins when both are present;
+ *  reasoning is only a fallback. */
 function contentPartText(v: unknown): string {
   if (typeof v === "string") return v;
   if (Array.isArray(v)) {
@@ -368,7 +428,7 @@ function contentPartText(v: unknown): string {
   return "";
 }
 
-function extractOpenRouterText(data: {
+function extractChatCompletionsText(data: {
   choices?: {
     message?: Record<string, unknown> | null;
     reasoning?: unknown;
@@ -1084,7 +1144,7 @@ async function callOpenRouter(
     // Tolerant extraction: some free models (notably reasoning-mandatory
     // ones such as Ernie) return an empty content with the answer in the
     // reasoning field, or wrap JSON in fences/prose.
-    const { content, reasoning } = extractOpenRouterText(data);
+    const { content, reasoning } = extractChatCompletionsText(data);
     const text = (content || reasoning).trim();
     if (!text) {
       console.warn(
@@ -1145,6 +1205,137 @@ async function callOpenRouter(
   }
 }
 
+/** OpenAI (ChatGPT) via its own chat-completions endpoint — the same
+ *  OpenAI-compatible shape as OpenRouter, so the same tolerant
+ *  parsing applies. The key travels ONLY in the Authorization header
+ *  — never in the URL, body, or logs. Images (Scam Shield
+ *  screenshots) are sent as data-URL image parts; gpt-4o-mini takes
+ *  image input, so no model needs skipping. One attempt: the paid
+ *  API is reliable, and a 401 (bad key) or 429 (insufficient credits)
+ *  would fail identically on a retry, so the caller falls back
+ *  honestly instead. */
+async function callOpenAI(
+  key: string,
+  model: string,
+  prompt: string,
+  schema: z.ZodTypeAny | undefined,
+  images:
+    | { dataBase64: string; mimeType: string; caption?: string }[]
+    | undefined,
+  timeoutMs: number = OPENAI_CALL_TIMEOUT_MS,
+): Promise<unknown> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const jsonInstruction =
+      schema && !isStringSchema(schema)
+        ? "\n\nRespond with ONLY valid JSON matching the requested shape. No markdown, no extra text. Do not show your reasoning or thinking process — output only the final answer."
+        : "";
+    const userContent: unknown =
+      images && images.length > 0
+        ? [
+            { type: "text", text: prompt + jsonInstruction },
+            ...images.map((img) => ({
+              type: "image_url",
+              image_url: {
+                url: `data:${img.mimeType};base64,${img.dataBase64}`,
+              },
+            })),
+          ]
+        : prompt + jsonInstruction;
+    const res = await fetch(OPENAI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a careful financial assistant. Answer only from the figures given in the user message; never invent numbers. If the figures cannot answer the question, say so. Output only the final answer — do not include your reasoning, thinking, or planning.",
+          },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.2,
+        max_tokens: 2000,
+        ...(schema && !isStringSchema(schema)
+          ? { response_format: { type: "json_object" } }
+          : {}),
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      // Same bounded-error rule as the other providers: status +
+      // body, never the key. A 429 from OpenAI usually means
+      // insufficient credits/quota — retrying would not help.
+      let detail = "";
+      try {
+        detail = (await res.text()).slice(0, 500);
+      } catch {
+        detail = "";
+      }
+      const message = `OpenAI answered ${res.status}${detail ? `: ${detail}` : ""}`;
+      if (res.status === 429) throw taggedError("rate_limited", message);
+      throw new Error(message);
+    }
+    const data = (await res.json()) as {
+      choices?: {
+        message?: {
+          content?: string | { text?: string }[] | null;
+          reasoning?: unknown;
+          reasoning_content?: unknown;
+        } | null;
+        reasoning?: unknown;
+      }[];
+    };
+    const { content, reasoning } = extractChatCompletionsText(data);
+    const text = (content || reasoning).trim();
+    if (!text) {
+      console.warn(
+        `[cashflow-genius] OpenAI returned no usable text (model ${model}): ${JSON.stringify(
+          data.choices?.[0]?.message ?? null,
+        ).slice(0, 300)}`,
+      );
+      throw taggedError("parse", "OpenAI returned no usable text");
+    }
+    if (!schema || isStringSchema(schema)) return text;
+    const parsed = parseJsonLoosely(text);
+    if (parsed !== undefined) {
+      const jsonAnswer = tryJsonAnswer(parsed, schema);
+      if (jsonAnswer !== null) return jsonAnswer;
+      const tolerant = tolerantAnswerFromParsed(parsed, schema, model);
+      if (tolerant !== null) return tolerant;
+    }
+    const textAnswer = textAnswerForSchema(schema, text, model);
+    if (textAnswer !== null) return textAnswer;
+    console.warn(
+      `[cashflow-genius] OpenAI answer did not match the expected shape (model ${model}): ${text.slice(0, 300)}`,
+    );
+    throw taggedError("parse", "OpenAI answer did not match the expected shape");
+  } catch (e) {
+    // A timed-out call is transient, but there is no second model to
+    // try — tag it and let the caller fall back honestly.
+    if (
+      (e as { name?: unknown } | null)?.name === "AbortError" ||
+      ctrl.signal.aborted
+    ) {
+      console.warn(
+        `[cashflow-genius] OpenAI call to ${model} timed out after ${timeoutMs}ms`,
+      );
+      throw taggedError(
+        "timeout",
+        `OpenAI call to ${model} timed out after ${timeoutMs}ms`,
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function aiComplete<T>(
   prompt: string,
   opts: {
@@ -1154,6 +1345,28 @@ export async function aiComplete<T>(
   settings: Partial<AiCallSettings> = {},
 ): Promise<T> {
   const provider = settings.provider ?? "gemini";
+  if (provider === "openai") {
+    const key = settings.openAiKey ?? process.env.OPENAI_API_KEY ?? null;
+    const model = settings.openAiModel || DEFAULT_OPENAI_MODEL;
+    if (!key) return ruleBasedFallback(opts.schema, provider) as T;
+    // One attempt: the paid API is reliable, and a 401 (bad key) or
+    // 429 (insufficient credits) would fail identically on a retry.
+    // gpt-4o-mini takes image input, so vision calls need no skip.
+    try {
+      const out = (await callOpenAI(
+        key,
+        model,
+        prompt,
+        opts.schema,
+        opts.images,
+      )) as T;
+      await markAiVerified(settings.ownerId ?? null, provider);
+      return out;
+    } catch (e) {
+      console.warn("[cashflow-genius] OpenAI call failed, using rule-based fallback:", e);
+      return ruleBasedFallback(opts.schema, provider) as T;
+    }
+  }
   if (provider === "openrouter") {
     const key = settings.openRouterKey ?? process.env.OPENROUTER_API_KEY ?? null;
     const selectedModel = settings.openRouterModel || DEFAULT_OPENROUTER_MODEL;
