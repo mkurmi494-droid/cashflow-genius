@@ -1320,7 +1320,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         </p>
         <p className="mt-2 text-sm font-semibold" role="status">
           {state.geminiKeySaved
-            ? `A key is saved for your account (ending ••••${state.geminiKeyLast4}). Gemini status: Not connected — saved for a future connection.`
+            ? `A key is saved for your account (ending ••••${state.geminiKeyLast4}). Gemini status: ${integrations.data?.services.find((s) => s.id === "gemini")?.status === "live" ? "Live — verified by a real Gemini call." : "Not connected — saved for a future connection."}`
             : "No Gemini API key saved for your account yet. Gemini status: Not connected."}
         </p>
         <form
@@ -1384,7 +1384,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         </p>
         <p className="mt-2 text-sm font-semibold" role="status">
           {state.openRouterKeySaved
-            ? `A key is saved for your account (ending ••••${state.openRouterKeyLast4}). OpenRouter status: Not connected — saved for a future connection.`
+            ? `A key is saved for your account (ending ••••${state.openRouterKeyLast4}). OpenRouter status: ${integrations.data?.services.find((s) => s.id === "openrouter")?.status === "live" ? "Live — verified by a real OpenRouter call." : "Not connected — saved for a future connection."}`
             : "No OpenRouter API key saved for your account yet. OpenRouter status: Not connected."}
         </p>
         <form
