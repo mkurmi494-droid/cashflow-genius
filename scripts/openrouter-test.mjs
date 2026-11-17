@@ -12,7 +12,19 @@
 //  (d) the Gemini path is unchanged (no key → Gemini fallback; a
 //      mocked Gemini success still parses);
 //  (e) the success path still answers when the database is unreachable
-//      (markAiVerified is best-effort and never blocks the answer).
+//      (markAiVerified is best-effort and never blocks the answer);
+//  (f) a 429 on the selected model automatically tries the next
+//      verified-free model (after a ~4s backoff) and the answer parses;
+//  (g) tolerant parsing — reasoning-only replies, JSON in markdown
+//      fences, JSON wrapped in prose, JSON nested under an "answer"
+//      key, and plain free text (used as the answer) all work;
+//  (h) an unusable reply on model 1 tries model 2 (vision shape,
+//      where free text cannot fill the structured fields);
+//  (i) vision calls never send image parts to the text-only model
+//      (Ernie) — it is skipped even when selected;
+//  (j) a hopeless error (401) does not retry other models;
+//  (k) all free models throttled → rule-based fallback, after trying
+//      every free model in order, inside the ~50s attempt budget.
 //
 // Usage: node scripts/openrouter-test.mjs
 // Exit 0 = all pass. No key used here is real: the sentinel key is a
@@ -71,7 +83,7 @@ console.error = (...a) => {
   consoleOutput.push(a.map(String).join(" "));
 };
 
-const { aiComplete, aiExtrasFromRow, DEFAULT_OPENROUTER_MODEL } = await import(bundle);
+const { aiComplete, aiExtrasFromRow, DEFAULT_OPENROUTER_MODEL, OPENROUTER_FREE_MODELS } = await import(bundle);
 
 const cfoSchema = z.object({
   directAnswer: z.string(),
@@ -256,6 +268,258 @@ mockHandler = () => jsonResponse(200, openRouterOk(JSON.stringify(cannedCfo)));
   check("model defaults to google/gemma-4-31b-it:free", () => {
     assert.equal(DEFAULT_OPENROUTER_MODEL, "google/gemma-4-31b-it:free");
     assert.equal(JSON.parse(requests[0].init.body).model, "google/gemma-4-31b-it:free");
+  });
+}
+
+// (f) 429 on the selected model → automatic fallback to the next free
+//     model (with the ~4s backoff), and the answer still parses
+resetMock();
+mockHandler = (url, init) => {
+  const body = JSON.parse(init.body);
+  if (body.model === "google/gemma-4-31b-it:free") {
+    return jsonResponse(429, {
+      error: { message: "Provider returned error", code: 429 },
+    });
+  }
+  return jsonResponse(200, openRouterOk(JSON.stringify(cannedCfo)));
+};
+{
+  const t0 = Date.now();
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  const elapsed = Date.now() - t0;
+  resultsDump.push(JSON.stringify(res));
+  check("429 on model 1 → success on model 2, answer parsed", () => {
+    assert.equal(res.directAnswer, cannedCfo.directAnswer);
+    assert.equal(requests.length, 2);
+    assert.equal(JSON.parse(requests[0].init.body).model, "google/gemma-4-31b-it:free");
+    assert.equal(JSON.parse(requests[1].init.body).model, "inclusionai/ling-3.2-flash:free");
+  });
+  check("rate-limit backoff waits ~4s before the next model", () => {
+    assert.ok(elapsed >= 3000, `expected >=3s backoff, got ${elapsed}ms`);
+  });
+}
+
+// (g) tolerant parsing: reasoning-only, fenced, prose-wrapped and
+//     wrapper-object replies all parse; free text becomes the answer
+const reasoningOnly = () => ({
+  choices: [{ message: { role: "assistant", content: "", reasoning: JSON.stringify(cannedCfo) } }],
+});
+const fenced = () => openRouterOk("```json\n" + JSON.stringify(cannedCfo) + "\n```");
+const proseWrapped = () =>
+  openRouterOk("Here is my analysis: " + JSON.stringify(cannedCfo) + " Hope this helps.");
+const wrapperObject = () => openRouterOk(JSON.stringify({ answer: cannedCfo }));
+for (const [name, body] of [
+  ["reasoning-only reply (empty content + reasoning JSON)", reasoningOnly()],
+  ["JSON wrapped in markdown code fences", fenced()],
+  ["JSON wrapped in prose", proseWrapped()],
+  ["JSON nested under an 'answer' key", wrapperObject()],
+]) {
+  resetMock();
+  mockHandler = () => jsonResponse(200, body);
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check(`tolerant parse: ${name}`, () => {
+    assert.equal(res.directAnswer, cannedCfo.directAnswer);
+    assert.equal(requests.length, 1);
+  });
+}
+resetMock();
+mockHandler = () => jsonResponse(200, openRouterOk("Aapka cash theek hai, ₹3,440 available hai."));
+{
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("free-text reply (no JSON) is used as the answer, not discarded", () => {
+    assert.ok(res.directAnswer.includes("₹3,440"));
+    assert.ok(!res.directAnswer.includes("could not reach"));
+    assert.equal(requests.length, 1);
+  });
+}
+{
+  const briefingSchema = z.object({
+    headline: z.string(),
+    points: z.array(z.string()).min(1).max(5),
+  });
+  resetMock();
+  mockHandler = () =>
+    jsonResponse(200, openRouterOk("Cash is steady.\nIncome is ahead of spending.\nNo overdue invoices."));
+  const res = await aiComplete(
+    "Daily briefing.",
+    { schema: briefingSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("free-text briefing becomes headline + points", () => {
+    assert.ok(res.headline.length > 0);
+    assert.ok(res.points.length >= 1 && res.points.length <= 5);
+    assert.ok(res.points.join(" ").includes("Cash is steady"));
+  });
+}
+
+// (h) parse failure on model 1 → next model (vision shape, where free
+//     text cannot fill the structured fields)
+const imageOutSchema = z.object({
+  readable: z.boolean(),
+  appearsToBePaymentScreenshot: z.boolean(),
+  visibleText: z.string(),
+  senderOrReceiverName: z.string().nullable(),
+  upiId: z.string().nullable(),
+  amountText: z.string().nullable(),
+  dateText: z.string().nullable(),
+  statusWording: z.string().nullable(),
+  editingSigns: z.string(),
+});
+const cannedImage = {
+  readable: true,
+  appearsToBePaymentScreenshot: true,
+  visibleText: "Paid ₹500",
+  senderOrReceiverName: null,
+  upiId: null,
+  amountText: "₹500",
+  dateText: null,
+  statusWording: null,
+  editingSigns: "none",
+};
+resetMock();
+mockHandler = (url, init) => {
+  const body = JSON.parse(init.body);
+  if (body.model === "google/gemma-4-31b-it:free") {
+    return jsonResponse(200, openRouterOk("I can see a payment screenshot but cannot structure it."));
+  }
+  return jsonResponse(200, openRouterOk(JSON.stringify(cannedImage)));
+};
+{
+  const res = await aiComplete(
+    "Read this screenshot.",
+    {
+      schema: imageOutSchema,
+      images: [{ dataBase64: "aGVsbG8=", mimeType: "image/jpeg" }],
+    },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("unusable reply on model 1 → structured answer from model 2", () => {
+    assert.equal(res.readable, true);
+    assert.equal(res.amountText, "₹500");
+    assert.equal(requests.length, 2);
+    assert.equal(JSON.parse(requests[1].init.body).model, "inclusionai/ling-3.2-flash:free");
+  });
+}
+
+// (i) vision calls never send image parts to the text-only model
+resetMock();
+mockHandler = () => jsonResponse(200, openRouterOk(JSON.stringify(cannedImage)));
+{
+  const res = await aiComplete(
+    "Read this screenshot.",
+    {
+      schema: imageOutSchema,
+      images: [{ dataBase64: "aGVsbG8=", mimeType: "image/jpeg" }],
+    },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "baidu/ernie-5.5-flash-preview:free",
+      ownerId: "test-owner",
+    },
+  );
+  check("text-only selected model is skipped for vision; images go to a vision model", () => {
+    assert.equal(res.readable, true);
+    const models = requests.map((r) => JSON.parse(r.init.body).model);
+    assert.ok(!models.includes("baidu/ernie-5.5-flash-preview:free"));
+    assert.equal(models[0], "google/gemma-4-31b-it:free");
+    const body = JSON.parse(requests[0].init.body);
+    const content = body.messages[1].content;
+    assert.ok(Array.isArray(content));
+    assert.ok(content.some((p) => p.type === "image_url"));
+  });
+}
+
+// (j) a hopeless error (401 bad key) does NOT retry other models
+resetMock();
+mockHandler = () =>
+  jsonResponse(401, { error: { message: "No auth credentials found", code: 401 } });
+{
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("401 stops at once — no pointless retries, fallback names OpenRouter", () => {
+    assert.equal(requests.length, 1);
+    assert.ok(res.directAnswer.includes("OpenRouter"));
+  });
+}
+
+// (k) every free model throttled → rule-based fallback after trying all
+resetMock();
+mockHandler = () =>
+  jsonResponse(429, { error: { message: "Provider returned error", code: 429 } });
+{
+  const t0 = Date.now();
+  const res = await aiComplete(
+    "How is my cashflow this month?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  const elapsed = Date.now() - t0;
+  resultsDump.push(JSON.stringify(res));
+  check("all models 429 → fallback after trying every free model in order", () => {
+    assert.ok(res.directAnswer.includes("OpenRouter"));
+    assert.ok(res.directAnswer.includes("not an AI analysis"));
+    const models = requests.map((r) => JSON.parse(r.init.body).model);
+    assert.deepEqual(models, [...OPENROUTER_FREE_MODELS]);
+    assert.equal(requests.length, OPENROUTER_FREE_MODELS.length);
+  });
+  check("whole chain stays inside the ~50s attempt budget", () => {
+    assert.ok(elapsed < 50000, `chain took ${elapsed}ms`);
   });
 }
 
