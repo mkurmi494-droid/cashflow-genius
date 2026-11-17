@@ -1164,14 +1164,14 @@ mockHandler = (url) => {
 }
 
 // (e) settings defaults from a row (no DB needed)
-check("aiExtrasFromRow(null) defaults to gemini + free model", () => {
+check("aiExtrasFromRow(null) defaults to openai + free model", () => {
   const s = aiExtrasFromRow(null, "o1");
-  assert.equal(s.provider, "gemini");
+  assert.equal(s.provider, "openai");
   assert.equal(s.openRouterModel, "google/gemma-4-31b-it:free");
   assert.equal(s.geminiKey, null);
   assert.equal(s.openRouterKey, null);
 });
-check("aiExtrasFromRow(openrouter row) honours provider + model", () => {
+check("aiExtrasFromRow ignores stored provider — engine is fixed to OpenAI", () => {
   const s = aiExtrasFromRow(
     {
       aiProvider: "openrouter",
@@ -1181,7 +1181,7 @@ check("aiExtrasFromRow(openrouter row) honours provider + model", () => {
     },
     "o1",
   );
-  assert.equal(s.provider, "openrouter");
+  assert.equal(s.provider, "openai");
   assert.equal(s.openRouterModel, "openrouter/free");
   assert.equal(s.openRouterKey, "sk-or-v1-ROWKEY");
 });
