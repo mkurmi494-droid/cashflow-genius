@@ -343,6 +343,24 @@ resetMock();
   });
 }
 
+// (i) state-row batch selects carry the OpenAI columns — regression
+// guard for the live bug found 2026-11-17: loadWorkspacePrelude and
+// loadCombinedBatch select the state row column-by-column, and the
+// OpenAI columns were missing, so getState (Settings key section,
+// CFO page status) and getBriefing (dashboard daily briefing) saw
+// no OpenAI key even though the CFO itself worked (askCfo reads the
+// full row). Both selects must list both columns.
+{
+  const { readFileSync } = await import("node:fs");
+  const batchSrc = readFileSync(join(repoRoot, "server/lib/batch.ts"), "utf8");
+  const keyCols = (batchSrc.match(/openai_api_key as "openAiApiKey"/g) ?? []).length;
+  const modelCols = (batchSrc.match(/openai_model as "openAiModel"/g) ?? []).length;
+  check("both batch state selects list openai_api_key and openai_model", () => {
+    assert.equal(keyCols, 2);
+    assert.equal(modelCols, 2);
+  });
+}
+
 // (c) leak audit: the sentinel key appears ONLY in the Authorization header
 {
   const haystack = resultsDump.join("\n") + "\n" + consoleOutput.join("\n");
