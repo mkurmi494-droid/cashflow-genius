@@ -21,7 +21,15 @@
 //    request. Need produce final only valid JSON...") without ever
 //    producing an answer. That is rejected and the next free model is
 //    tried, so the user never reads the model's thinking as the
-//    answer.
+//    answer. A reply that DOES answer is never thrown away over form:
+//    if the parsed JSON has a real direct answer (or headline +
+//    points) but is missing an optional field, or returns key_numbers
+//    as a map instead of an array, the missing pieces are filled with
+//    honest defaults and the answer is used. Each model gets at most
+//    ~12s, so one slow model cannot eat the whole attempt budget, and
+//    a timed-out call tries the next free model instead of stopping
+//    the chain. Ernie answers last: it is reasoning-mandatory, slow
+//    and trace-prone, so the clean models go first.
 //
 // Without any key for the selected provider, or whenever the provider
 // call fails, answers come from an honest rule-based fallback built
@@ -59,14 +67,19 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 // is the default because Gemma 4 is a reliable general-purpose model
 // with image input (the CFO's screenshot checks need vision); the user
 // can change the model in Settings, or use the openrouter/free router id
-// instead. Ernie is text-only, so vision calls skip it.
+// instead. Ernie is text-only, so vision calls skip it. Ernie is
+// LAST in this list, not third: it is reasoning-mandatory (it thinks
+// out loud about producing JSON instead of answering), slow, and
+// trace-prone, so the clean non-reasoning models are tried first and
+// Ernie only answers when they all fail. The caller tries the
+// selected model first, then the rest of the list in this order.
 export const DEFAULT_OPENROUTER_MODEL = "google/gemma-4-31b-it:free";
 export const OPENROUTER_FREE_MODELS = [
   "google/gemma-4-31b-it:free",
   "inclusionai/ling-3.2-flash:free",
-  "baidu/ernie-5.5-flash-preview:free",
   "particle-ai/particle-1:free",
   "thinkingmachines/inkling-2-small:free",
+  "baidu/ernie-5.5-flash-preview:free",
 ] as const;
 export const OPENROUTER_VISION_FREE_MODELS = [
   "google/gemma-4-31b-it:free",
@@ -80,8 +93,12 @@ const OPENROUTER_TEXT_ONLY_MODELS = new Set([
 ]);
 // Whole OpenRouter attempt budget (all models + backoff) so a chain of
 // retries still fits comfortably inside Vercel Hobby function limits.
+// Each model gets at most ~12s: a slow model used to eat the whole
+// budget on its own (one live request took 44.56s across 3 calls and
+// still timed out), so the chain never reached the later models. Five
+// models at ~12s fit the budget with room for the 429 backoff.
 const OPENROUTER_TOTAL_BUDGET_MS = 50_000;
-const OPENROUTER_CALL_TIMEOUT_MS = 20_000;
+const OPENROUTER_CALL_TIMEOUT_MS = 12_000;
 const OPENROUTER_RATE_LIMIT_BACKOFF_MS = 4_000;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const APP_URL = "https://cashflow-genius.vercel.app";
@@ -314,7 +331,10 @@ function sleep(ms: number): Promise<void> {
 /** Error with a machine-readable kind, so the retry loop can tell a
  *  transient failure (try the next free model) from a hopeless one
  *  (bad key, unknown model — retrying would not help). */
-function taggedError(code: "rate_limited" | "parse", message: string): Error {
+function taggedError(
+  code: "rate_limited" | "parse" | "timeout",
+  message: string,
+): Error {
   const e = new Error(message);
   (e as Error & { code?: string }).code = code;
   return e;
@@ -322,7 +342,7 @@ function taggedError(code: "rate_limited" | "parse", message: string): Error {
 
 function isRetryableOpenRouterError(e: unknown): boolean {
   const code = (e as { code?: unknown } | null)?.code;
-  return code === "rate_limited" || code === "parse";
+  return code === "rate_limited" || code === "parse" || code === "timeout";
 }
 
 function isRateLimitedError(e: unknown): boolean {
@@ -454,13 +474,14 @@ function toCamelKey(key: string): string {
   return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 }
 
-/** Aliases free models use for the CFO shape's fields, after
+/** Aliases free models use for the CFO/briefing shapes' fields, after
  *  snake_case is camelCased: key_numbers → numbers, key_points →
- *  points. */
+ *  points, briefing_points → points. */
 const ANSWER_KEY_ALIASES: Record<string, string> = {
   keyNumbers: "numbers",
   keyPoints: "points",
   keyFigures: "numbers",
+  briefingPoints: "points",
 };
 
 /** Normalise one key-numbers item into {label, value}. Accepts
@@ -578,6 +599,283 @@ function tryJsonAnswer(parsed: unknown, schema: z.ZodTypeAny): unknown | null {
   return null;
 }
 
+/** Coerce a value into an array of non-empty strings. Accepts an
+ *  array (strings kept, numbers stringified), a single string
+ *  (split on newlines), or anything else → []. */
+function asStringList(v: unknown): string[] {
+  if (Array.isArray(v)) {
+    const out: string[] = [];
+    for (const item of v) {
+      if (typeof item === "string" && item.trim()) out.push(item.trim());
+      else if (typeof item === "number") out.push(String(item));
+      else if (Array.isArray(item)) out.push(...asStringList(item));
+    }
+    return out;
+  }
+  if (typeof v === "string" && v.trim()) {
+    return v
+      .split(/\n+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/** Coerce key-numbers into {label, value}[]: an array via
+ *  normalizeNumberItem; a map object via its entries ("Revenue":
+ *  "INR 3,540" → {label, value}); a string via "Label: value"
+ *  lines; anything else → []. A model that returns key_numbers as
+ *  a map instead of an array no longer loses the whole answer. */
+function asNumberList(v: unknown): { label: string; value: string }[] {
+  if (Array.isArray(v)) {
+    return v
+      .map(normalizeNumberItem)
+      .filter((n): n is { label: string; value: string } => n !== null);
+  }
+  if (v && typeof v === "object") {
+    const out: { label: string; value: string }[] = [];
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      const value =
+        typeof val === "string" ? val : typeof val === "number" ? String(val) : "";
+      if (k.trim() && value.trim()) {
+        out.push({ label: k.trim(), value: value.trim() });
+      }
+    }
+    return out;
+  }
+  if (typeof v === "string") {
+    return v
+      .split(/\n+/)
+      .map(normalizeNumberItem)
+      .filter((n): n is { label: string; value: string } => n !== null);
+  }
+  return [];
+}
+
+/** Coerce a value into prose: a string as-is, an array joined with
+ *  spaces, a number stringified, anything else → "". */
+function asProse(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  if (Array.isArray(v)) return asStringList(v).join(" ");
+  return "";
+}
+
+/** The single-level wrappers a model reply may hide its answer
+ *  under ({ answer: {...} } / { result: {...} } / { data: {...} }),
+ *  most useful first. */
+function answerCandidates(parsed: unknown): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const push = (v: unknown) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      out.push(v as Record<string, unknown>);
+    }
+  };
+  push(parsed);
+  if (parsed && typeof parsed === "object") {
+    for (const k of ["answer", "result", "data"]) {
+      push((parsed as Record<string, unknown>)[k]);
+    }
+  }
+  return out;
+}
+
+/** Build a CFO answer from a parsed reply that has a real direct
+ *  answer but would fail strict schema validation — a missing
+ *  explanation, supporting points or assumptions, or key_numbers as
+ *  a map instead of an array. Missing fields get honest defaults
+ *  (never invented figures); the direct answer is the model's own
+ *  words. Returns null when no candidate has a usable direct
+ *  answer. */
+function tolerantCfoAnswer(
+  parsed: unknown,
+  schema: z.ZodTypeAny,
+  model: string,
+): unknown | null {
+  for (const candidate of answerCandidates(parsed)) {
+    const n = normalizeAnswerShape(candidate) as Record<string, unknown>;
+    const direct = asProse(n.directAnswer).trim();
+    if (!direct) continue;
+    const obj = {
+      directAnswer: direct.slice(0, 4000),
+      numbers: asNumberList(n.numbers),
+      explanation:
+        asProse(n.explanation).trim() ||
+        "The model gave a direct answer without a separate explanation — the direct answer above carries the full reply.",
+      supportingData: asStringList(n.supportingData),
+      options: asStringList(n.options),
+      assumptions:
+        asProse(n.assumptions).trim() ||
+        `Answered by ${model}. Figures come only from the data supplied with the question; nothing was invented.`,
+    };
+    const checked = schema.safeParse(obj);
+    if (checked.success) return checked.data;
+  }
+  return null;
+}
+
+/** Build a daily briefing from a parsed reply that has a headline
+ *  and/or points under any of the names models use (points,
+ *  briefing_points, key_points). Accepts headline + points, points
+ *  alone (the first point becomes the headline), or headline alone
+ *  (the headline becomes the single point). Returns null when
+ *  neither a headline nor any point can be found. */
+function tolerantBriefingAnswer(
+  parsed: unknown,
+  schema: z.ZodTypeAny,
+): unknown | null {
+  for (const candidate of answerCandidates(parsed)) {
+    const n = normalizeAnswerShape(candidate) as Record<string, unknown>;
+    const headline = asProse(n.headline).trim();
+    const points = asStringList(n.points);
+    if (!headline && points.length === 0) continue;
+    const finalHeadline = ((headline || points[0]) ?? "").slice(0, 200);
+    const finalPoints = (points.length > 0 ? points : [finalHeadline]).slice(0, 5);
+    if (!finalHeadline || finalPoints.length === 0) continue;
+    const checked = schema.safeParse({
+      headline: finalHeadline,
+      points: finalPoints,
+    });
+    if (checked.success) return checked.data;
+  }
+  return null;
+}
+
+/** Last-chance acceptance for a parsed reply: a real direct answer
+ *  (CFO) or a real headline + points (briefing) is never thrown
+ *  away over a missing optional field or an oddly-shaped numbers
+ *  list. Returns the validated answer or null. */
+function tolerantAnswerFromParsed(
+  parsed: unknown,
+  schema: z.ZodTypeAny,
+  model: string,
+): unknown | null {
+  const keys = shapeKeys(schema);
+  if (keys.includes("directAnswer")) {
+    return tolerantCfoAnswer(parsed, schema, model);
+  }
+  if (keys.includes("headline") && keys.includes("points")) {
+    return tolerantBriefingAnswer(parsed, schema);
+  }
+  return null;
+}
+
+/** Pull a JSON array field out of text that looks like JSON but
+ *  would not parse (for example a reply cut off mid-way): find
+ *  "key", scan to the matching "]" respecting strings, and parse
+ *  just that array. Returns null when the field or a complete array
+ *  is not there. */
+function extractJsonArrayField(text: string, keys: string[]): unknown[] | null {
+  for (const key of keys) {
+    const idx = text.indexOf(`"${key}"`);
+    if (idx < 0) continue;
+    const colon = text.indexOf(":", idx + key.length + 2);
+    if (colon < 0) continue;
+    let i = colon + 1;
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    if (text[i] !== "[") continue;
+    let depth = 0;
+    let inString = false;
+    let j = i;
+    for (; j < text.length; j++) {
+      const ch = text[j]!;
+      if (inString) {
+        if (ch === "\\") {
+          j++;
+          continue;
+        }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "[") depth++;
+      if (ch === "]") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (depth !== 0) continue;
+    try {
+      const parsed = JSON.parse(text.slice(i, j + 1));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      /* not a parseable array — try the next key */
+    }
+  }
+  return null;
+}
+
+/** Salvage an answer from JSON-looking text that would not parse —
+ *  typically a reply cut off mid-string (a model that stopped early
+ *  or the old 4000-character cap). Pulls the direct answer /
+ *  headline and the key-numbers / points arrays field-by-field;
+ *  anything missing gets honest defaults. Returns null when no
+ *  direct answer or headline can be found. */
+function salvageTruncatedJsonAnswer(
+  clean: string,
+  schema: z.ZodTypeAny,
+  model: string,
+): unknown | null {
+  const keys = shapeKeys(schema);
+  if (keys.includes("directAnswer")) {
+    const direct = extractJsonStringField(clean, ["direct_answer", "directAnswer"]);
+    if (!direct) return null;
+    const numbersRaw = extractJsonArrayField(clean, [
+      "key_numbers",
+      "keyNumbers",
+      "numbers",
+    ]);
+    const explanation = extractJsonStringField(clean, ["explanation"]);
+    const supportingRaw = extractJsonArrayField(clean, [
+      "supporting_data_points",
+      "supporting_data",
+      "supportingData",
+    ]);
+    const optionsRaw = extractJsonArrayField(clean, ["suggested_options", "options"]);
+    const assumptions = extractJsonStringField(clean, [
+      "assumptions_and_limitations",
+      "assumptions",
+    ]);
+    const obj = {
+      directAnswer: direct.trim().slice(0, 4000),
+      numbers: numbersRaw ? asNumberList(numbersRaw) : [],
+      explanation:
+        explanation?.trim() ||
+        "The model gave a direct answer without a separate explanation — the direct answer above carries the full reply.",
+      supportingData: supportingRaw ? asStringList(supportingRaw) : [],
+      options: optionsRaw ? asStringList(optionsRaw) : [],
+      assumptions:
+        assumptions?.trim() ||
+        `Answered by ${model}. Figures come only from the data supplied with the question; nothing was invented.`,
+    };
+    const checked = schema.safeParse(obj);
+    return checked.success ? checked.data : null;
+  }
+  if (keys.includes("headline") && keys.includes("points")) {
+    const headline = extractJsonStringField(clean, ["headline"]);
+    const pointsRaw = extractJsonArrayField(clean, [
+      "briefing_points",
+      "briefingPoints",
+      "points",
+      "key_points",
+      "keyPoints",
+    ]);
+    const points = pointsRaw ? asStringList(pointsRaw) : [];
+    if (!headline && points.length === 0) return null;
+    const finalHeadline = ((headline?.trim() || points[0]) ?? "").slice(0, 200);
+    const finalPoints = (points.length > 0 ? points : [finalHeadline]).slice(0, 5);
+    const checked = schema.safeParse({
+      headline: finalHeadline,
+      points: finalPoints,
+    });
+    return checked.success ? checked.data : null;
+  }
+  return null;
+}
+
 /** A reasoning-mandatory model thinking out loud instead of
  *  answering: meta-talk about producing the JSON shape ("We need
  *  answer user's request. Need produce final only valid JSON matching
@@ -643,38 +941,23 @@ function textAnswerForSchema(
   if (loose !== undefined) {
     const jsonAnswer = tryJsonAnswer(loose, schema);
     if (jsonAnswer !== null) return jsonAnswer;
-    // 2. JSON that would not fully validate: keep whatever structured
-    //    fields survived normalisation instead of dropping the answer.
-    if (keys.includes("directAnswer")) {
-      const normalized = normalizeAnswerShape(loose);
-      const direct =
-        typeof (normalized as Record<string, unknown>)?.directAnswer === "string"
-          ? ((normalized as Record<string, unknown>).directAnswer as string)
-          : extractJsonStringField(clean, ["direct_answer", "directAnswer"]);
-      if (direct && direct.trim()) {
-        const n = normalized as Record<string, unknown>;
-        const obj = {
-          directAnswer: direct.trim().slice(0, 4000),
-          numbers: Array.isArray(n.numbers) ? n.numbers : [],
-          explanation:
-            typeof n.explanation === "string" && n.explanation
-              ? n.explanation
-              : "The model answered in JSON that could not be fully parsed — the direct answer above carries the full reply.",
-          supportingData: Array.isArray(n.supportingData) ? n.supportingData : [],
-          options: Array.isArray(n.options) ? n.options : [],
-          assumptions:
-            typeof n.assumptions === "string" && n.assumptions
-              ? n.assumptions
-              : `Answered by ${model}. Figures come only from the data supplied with the question; nothing was invented.`,
-        };
-        const checked = schema.safeParse(obj);
-        if (checked.success) return checked.data;
-      }
-    }
+    // 2. JSON that would not fully validate: a real direct answer
+    //    (or headline + points) is still an answer — fill the missing
+    //    fields with honest defaults instead of dropping it. This is
+    //    the live Ernie case: a direct_answer was produced but the
+    //    strict shape check threw the whole answer away.
+    const tolerant = tolerantAnswerFromParsed(loose, schema, model);
+    if (tolerant !== null) return tolerant;
   }
-  // 3. Text that looks like JSON but yielded nothing usable is NOT
-  //    embedded raw — the caller tries the next model instead.
-  if (looksLikeJson(clean)) return null;
+  // 3. Text that looks like JSON but would not parse (cut off
+  //    mid-string): salvage the fields one by one instead of showing
+  //    it raw or dropping it. Only when nothing can be salvaged does
+  //    the caller try the next model.
+  if (looksLikeJson(clean)) {
+    const salvaged = salvageTruncatedJsonAnswer(clean, schema, model);
+    if (salvaged !== null) return salvaged;
+    return null;
+  }
   // 3b. A reasoning trace is not an answer: the model thought out loud
   //     about producing JSON and never produced one. Return null so the
   //     caller tries the next free model instead of showing the model's
@@ -821,6 +1104,12 @@ async function callOpenRouter(
       // match the schema's case must still land as structured fields.
       const jsonAnswer = tryJsonAnswer(parsed, schema);
       if (jsonAnswer !== null) return jsonAnswer;
+      // A real direct answer (or headline + points) with a missing
+      // optional field or oddly-shaped numbers is still an answer —
+      // fill the gaps with honest defaults instead of burning the
+      // next model on a retry.
+      const tolerant = tolerantAnswerFromParsed(parsed, schema, model);
+      if (tolerant !== null) return tolerant;
     }
     // No JSON matching the schema — but there IS a real answer in text.
     // Use it rather than throwing the work away.
@@ -832,6 +1121,25 @@ async function callOpenRouter(
       `[cashflow-genius] OpenRouter answer did not match the expected shape (model ${model}): ${text.slice(0, 300)}`,
     );
     throw taggedError("parse", "OpenRouter answer did not match the expected shape");
+  } catch (e) {
+    // A timed-out call used to kill the whole chain: AbortError has
+    // no retry code, so aiComplete stopped at the first slow model.
+    // A timeout is transient — the next free model may answer fast —
+    // so tag it retryable and name the model that was too slow
+    // (never the key).
+    if (
+      (e as { name?: unknown } | null)?.name === "AbortError" ||
+      ctrl.signal.aborted
+    ) {
+      console.warn(
+        `[cashflow-genius] OpenRouter call to ${model} timed out after ${timeoutMs}ms — trying the next free model`,
+      );
+      throw taggedError(
+        "timeout",
+        `OpenRouter call to ${model} timed out after ${timeoutMs}ms`,
+      );
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
   }
@@ -882,9 +1190,10 @@ export async function aiComplete<T>(
         return out;
       } catch (e) {
         lastError = e;
-        // Only a throttled pool (429) or an unusable reply shape is
-        // worth another model: a 401 (bad key) or 404 (unknown model)
-        // would fail identically on every model, so stop at once.
+        // Only a throttled pool (429), a timed-out call, or an
+        // unusable reply shape is worth another model: a 401 (bad
+        // key) or 404 (unknown model) would fail identically on every
+        // model, so stop at once.
         if (!isRetryableOpenRouterError(e)) break;
         if (isRateLimitedError(e)) {
           // Short backoff before the next model — but only if the
