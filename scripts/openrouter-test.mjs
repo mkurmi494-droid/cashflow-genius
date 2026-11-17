@@ -32,6 +32,17 @@
 //  (j) a hopeless error (401) does not retry other models;
 //  (k) all free models throttled → rule-based fallback, after trying
 //      every free model in order, inside the ~50s attempt budget.
+//  (n) tolerant shape acceptance — a reply with a real direct_answer
+//      but missing optional fields, or key_numbers as a map instead
+//      of an array, is accepted with honest defaults (never thrown
+//      away); a briefing with headline + briefing_points is accepted;
+//      JSON cut off mid-string is salvaged field-by-field;
+//  (o) per-model timeout (~12s) — a model that never answers is
+//      aborted and the next free model is tried (fake timers, so the
+//      test does not really wait); all models timing out → honest
+//      fallback after trying every free model;
+//  (p) Ernie is last in the free-model chain — reasoning-mandatory,
+//      slow and trace-prone, so the clean models are tried first.
 //
 // Usage: node scripts/openrouter-test.mjs
 // Exit 0 = all pass. No key used here is real: the sentinel key is a
@@ -836,6 +847,208 @@ mockHandler = () =>
     assert.equal(res.numbers[0].value, "₹3,440");
   });
 }
+
+// (n) tolerant shape acceptance — the live Ernie failures: a real
+//      direct_answer was produced but the strict shape check threw
+//      the whole answer away (missing optional fields, key_numbers
+//      as a map, briefing_points instead of points, JSON cut off
+//      mid-string). A real answer is never discarded over form now.
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(
+      JSON.stringify({
+        direct_answer:
+          "Aapka cash filhaal bilkul theek chal raha hai — available cash INR 3,440 hai.",
+        key_numbers: { Revenue: "INR 3,540", Expenses: "INR 100" },
+      }),
+    ),
+  );
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("JSON with a valid direct answer but missing fields + key_numbers as a map is accepted, not discarded", () => {
+    assert.equal(requests.length, 1);
+    assert.ok(res.directAnswer.startsWith("Aapka cash filhaal bilkul theek"));
+    assert.equal(res.numbers.length, 2);
+    assert.deepEqual(res.numbers[0], { label: "Revenue", value: "INR 3,540" });
+    assert.deepEqual(res.numbers[1], { label: "Expenses", value: "INR 100" });
+    assert.ok(res.explanation.length > 0);
+    assert.ok(!res.directAnswer.includes("could not reach"));
+  });
+}
+{
+  const briefingSchema = z.object({
+    headline: z.string(),
+    points: z.array(z.string()).min(1).max(5),
+  });
+  resetMock();
+  mockHandler = () =>
+    jsonResponse(
+      200,
+      openRouterOk(
+        JSON.stringify({
+          headline:
+            "Test Business daily briefing: INR 3,440 available cash and INR 3,440 net profit",
+          briefing_points: [
+            "Cash is steady.",
+            "No overdue invoices.",
+            "Revenue ahead of spending.",
+          ],
+        }),
+      ),
+    );
+  const res = await aiComplete(
+    "Daily briefing.",
+    { schema: briefingSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("briefing JSON with headline + briefing_points (not 'points') is accepted", () => {
+    assert.equal(requests.length, 1);
+    assert.ok(res.headline.includes("INR 3,440"));
+    assert.equal(res.points.length, 3);
+    assert.ok(res.points[0].includes("Cash is steady"));
+  });
+}
+resetMock();
+mockHandler = () =>
+  jsonResponse(
+    200,
+    openRouterOk(
+      '{"direct_answer": "Aapka cash filhaal bilkul theek chal raha hai — available cash INR 3,440 hai.", "key_numbers": [{"label": "Revenue", "value": "INR 3,540"}, {"label": "Expenses", "value": "INR 100"}], "explanation": "Cashflow strong hai kyunki revenue expenses se bahut zyada',
+    ),
+  );
+{
+  const res = await aiComplete(
+    "Mera cash kaisa chal raha hai?",
+    { schema: cfoSchema },
+    {
+      provider: "openrouter",
+      openRouterKey: SENTINEL_KEY,
+      openRouterModel: "google/gemma-4-31b-it:free",
+      ownerId: "test-owner",
+    },
+  );
+  resultsDump.push(JSON.stringify(res));
+  check("JSON cut off mid-string is salvaged field-by-field, not discarded", () => {
+    assert.equal(requests.length, 1);
+    assert.ok(res.directAnswer.startsWith("Aapka cash filhaal bilkul theek"));
+    assert.equal(res.numbers.length, 2);
+    assert.deepEqual(res.numbers[0], { label: "Revenue", value: "INR 3,540" });
+    assert.ok(!res.directAnswer.includes("could not reach"));
+  });
+}
+
+// (o) per-model timeout — a model that never answers used to kill
+//      the whole chain (AbortError had no retry code, so aiComplete
+//      stopped at the first slow model). Fake timers make the ~12s
+//      abort fire at once, so the test proves the mechanism without
+//      really waiting.
+{
+  const realSetTimeout = globalThis.setTimeout;
+  // Fire every timer immediately: the abort timer and any backoff.
+  // The mock's microtask responses still resolve before the next
+  // macrotask, so a healthy model answers before its abort fires.
+  globalThis.setTimeout = (fn, ...args) => realSetTimeout(fn, 0, ...args);
+  try {
+    resetMock();
+    mockHandler = (url, init) => {
+      const body = JSON.parse(init.body);
+      if (body.model === "google/gemma-4-31b-it:free") {
+        // Hangs forever; only the abort signal ends it — like a live
+        // free-model pool that never answers.
+        return new Promise((_, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(
+              Object.assign(new Error("This operation was aborted"), {
+                name: "AbortError",
+              }),
+            ),
+          );
+        });
+      }
+      return jsonResponse(200, openRouterOk(JSON.stringify(cannedCfo)));
+    };
+    const res = await aiComplete(
+      "How is my cashflow this month?",
+      { schema: cfoSchema },
+      {
+        provider: "openrouter",
+        openRouterKey: SENTINEL_KEY,
+        openRouterModel: "google/gemma-4-31b-it:free",
+        ownerId: "test-owner",
+      },
+    );
+    resultsDump.push(JSON.stringify(res));
+    check("slow model aborted by per-model timeout → next model answers", () => {
+      assert.equal(requests.length, 2);
+      assert.equal(
+        JSON.parse(requests[1].init.body).model,
+        "inclusionai/ling-3.2-flash:free",
+      );
+      assert.equal(res.directAnswer, cannedCfo.directAnswer);
+    });
+    resetMock();
+    mockHandler = (url, init) =>
+      new Promise((_, reject) => {
+        init.signal.addEventListener("abort", () =>
+          reject(
+            Object.assign(new Error("This operation was aborted"), {
+              name: "AbortError",
+            }),
+          ),
+        );
+      });
+    const res2 = await aiComplete(
+      "How is my cashflow this month?",
+      { schema: cfoSchema },
+      {
+        provider: "openrouter",
+        openRouterKey: SENTINEL_KEY,
+        openRouterModel: "google/gemma-4-31b-it:free",
+        ownerId: "test-owner",
+      },
+    );
+    resultsDump.push(JSON.stringify(res2));
+    check("every model timing out → honest fallback after trying all five", () => {
+      assert.equal(requests.length, OPENROUTER_FREE_MODELS.length);
+      assert.ok(res2.directAnswer.includes("OpenRouter"));
+      assert.ok(res2.directAnswer.includes("not an AI analysis"));
+    });
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+}
+
+// (p) Ernie is last in the free-model chain — reasoning-mandatory,
+//      slow and trace-prone, so the clean models are tried first.
+check("Ernie is last in the free-model fallback chain", () => {
+  assert.equal(
+    OPENROUTER_FREE_MODELS[OPENROUTER_FREE_MODELS.length - 1],
+    "baidu/ernie-5.5-flash-preview:free",
+  );
+  assert.ok(
+    !OPENROUTER_FREE_MODELS.slice(0, -1).includes(
+      "baidu/ernie-5.5-flash-preview:free",
+    ),
+  );
+});
 
 // (g6) the exact stored shape of the first live "Bilkul sahi"
 //      conversation: the model's JSON reply was embedded raw inside
