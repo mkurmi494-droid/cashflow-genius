@@ -286,7 +286,10 @@ export async function checkDatabase(): Promise<DbDiagnosis> {
   if (!client)
     return { reachable: false, tablesReady: false, code: "NO_DATABASE_URL" };
   try {
-    await client`select 1`;
+    // One statement proves both connectivity and table presence:
+    // if it answers, the database is reachable. (A bare `select 1`
+    // used to run first — a second round-trip for the same answer,
+    // and every round-trip costs a full cross-region hop.)
     const rows = await client<{ exists: boolean }[]>`
       select exists (
         select 1 from information_schema.tables
