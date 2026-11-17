@@ -246,6 +246,12 @@ export function patchStateAfterMutation(
       return { ...prev, invoices: prev.invoices.filter((i) => i.id !== id) };
     }
 
+    case "deleteConversation": {
+      const id = asStr(args.conversationId);
+      if (!id) return prev;
+      return { ...prev, conversations: prev.conversations.filter((c) => c.id !== id) };
+    }
+
     case "analyseScamText": {
       const verdict = asStr(d.verdict);
       const riskScore = asNum(d.riskScore, -1);
