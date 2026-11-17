@@ -16,6 +16,12 @@
 //    OPENROUTER_FREE_MODELS, and replies are parsed tolerantly
 //    (fences, prose-wrapped JSON, reasoning-only answers) because
 //    reasoning-mandatory free models do not always return clean JSON.
+//    One shape is never shown, though: a reasoning trace — the model
+//    thinking out loud about producing JSON ("We need answer user's
+//    request. Need produce final only valid JSON...") without ever
+//    producing an answer. That is rejected and the next free model is
+//    tried, so the user never reads the model's thinking as the
+//    answer.
 //
 // Without any key for the selected provider, or whenever the provider
 // call fails, answers come from an honest rule-based fallback built
@@ -249,7 +255,7 @@ async function callGemini(
         text:
           prompt +
           (schema && !isStringSchema(schema)
-            ? "\n\nRespond with ONLY valid JSON matching the requested shape. No markdown, no extra text."
+            ? "\n\nRespond with ONLY valid JSON matching the requested shape. No markdown, no extra text. Do not show your reasoning or thinking process — output only the final answer."
             : ""),
       },
     ];
@@ -572,6 +578,42 @@ function tryJsonAnswer(parsed: unknown, schema: z.ZodTypeAny): unknown | null {
   return null;
 }
 
+/** A reasoning-mandatory model thinking out loud instead of
+ *  answering: meta-talk about producing the JSON shape ("We need
+ *  answer user's request. Need produce final only valid JSON matching
+ *  requested shape. Need infer shape? Need likely JSON object with
+ *  fields: direct_answer, key_numbers, ...") that never becomes an
+ *  answer. True when the text opens with that planning language,
+ *  quotes the JSON-shape instruction back, or is made of two or more
+ *  short imperative sentences starting with "Need ..." / "We need
+ *  ...". A genuine answer does not plan the reply out loud — it starts
+ *  with the answer itself — and a mid-sentence "you need to ..." is
+ *  never counted, so real advice is not mistaken for a trace. */
+const REASONING_TRACE_PATTERNS = [
+  /need\s+(produce|infer|figure out|determine|likely)\b.{0,80}json/i,
+  /need answer question:/i,
+  /valid json matching (the )?requested shape/i,
+  /fields?:\s*direct_answer/i,
+  /field labels stay as they are/i,
+];
+
+function isReasoningTrace(text: string): boolean {
+  const t = text.trim();
+  if (
+    /^(we need (to )?(answer|produce|infer|figure|determine)|need (produce|infer|figure|determine|answer|likely))/i.test(
+      t,
+    )
+  ) {
+    return true;
+  }
+  if (REASONING_TRACE_PATTERNS.some((re) => re.test(t))) return true;
+  const sentences = t.split(/(?<=[.!?])\s+/);
+  const planning = sentences.filter((s) =>
+    /^(need|we need|i need)\b/i.test(s.trim()),
+  ).length;
+  return planning >= 2;
+}
+
 /** Build a best-effort answer from the model's free-text reply when
  *  no JSON matching the schema could be extracted. A real grounded
  *  text answer beats the rule-based fallback. The JSON ladder runs
@@ -582,7 +624,9 @@ function tryJsonAnswer(parsed: unknown, schema: z.ZodTypeAny): unknown | null {
  *  of being shown raw. Returns null for shapes free text cannot
  *  honestly fill — the vision extraction shape (readable/…) needs
  *  structured fields, so a text reply there is not usable and the
- *  caller tries the next model instead. */
+ *  caller tries the next model instead. It also returns null for a
+ *  reasoning trace (see isReasoningTrace): the model thinking out
+ *  loud is not an answer, so the caller tries the next model. */
 function textAnswerForSchema(
   schema: z.ZodTypeAny | undefined,
   text: string,
@@ -631,6 +675,11 @@ function textAnswerForSchema(
   // 3. Text that looks like JSON but yielded nothing usable is NOT
   //    embedded raw — the caller tries the next model instead.
   if (looksLikeJson(clean)) return null;
+  // 3b. A reasoning trace is not an answer: the model thought out loud
+  //     about producing JSON and never produced one. Return null so the
+  //     caller tries the next free model instead of showing the model's
+  //     thinking as the answer.
+  if (isReasoningTrace(clean)) return null;
   // 4. Genuinely non-JSON prose: use it as the answer.
   if (keys.includes("directAnswer")) {
     const obj = {
@@ -685,7 +734,7 @@ async function callOpenRouter(
   try {
     const jsonInstruction =
       schema && !isStringSchema(schema)
-        ? "\n\nRespond with ONLY valid JSON matching the requested shape. No markdown, no extra text."
+        ? "\n\nRespond with ONLY valid JSON matching the requested shape. No markdown, no extra text. Do not show your reasoning or thinking process — output only the final answer."
         : "";
     const userContent: unknown =
       images && images.length > 0
@@ -713,7 +762,7 @@ async function callOpenRouter(
           {
             role: "system",
             content:
-              "You are a careful financial assistant. Answer only from the figures given in the user message; never invent numbers. If the figures cannot answer the question, say so.",
+              "You are a careful financial assistant. Answer only from the figures given in the user message; never invent numbers. If the figures cannot answer the question, say so. Output only the final answer — do not include your reasoning, thinking, or planning.",
           },
           { role: "user", content: userContent },
         ],
