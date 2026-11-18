@@ -11,6 +11,32 @@ export const metadata: Metadata = {
     icon: "/icon-192.png",
     apple: "/apple-touch-icon.png",
   },
+  /* Link previews (WhatsApp/Telegram/etc.) had no image to use, so they
+     showed a stale cached copy of the old ₹ tile. Point them at the new
+     Sprout logo explicitly so fresh shares preview the current logo. */
+  openGraph: {
+    title: "Cashflow Genius — See money before it moves",
+    description:
+      "Cashflow Genius — The Living Ledger. One calm home for your money: cashflow, what's due, savings goals, invoices with GST, a scam check for suspicious UPI messages, and an AI CFO that answers from your real numbers.",
+    url: "https://cashflow-genius.vercel.app",
+    siteName: "Cashflow Genius",
+    images: [
+      {
+        url: "https://cashflow-genius.vercel.app/icon-512.png",
+        width: 512,
+        height: 512,
+        alt: "Cashflow Genius logo",
+      },
+    ],
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Cashflow Genius — See money before it moves",
+    description:
+      "Cashflow Genius — The Living Ledger. One calm home for your money: cashflow, what's due, savings goals, invoices with GST, a scam check for suspicious UPI messages, and an AI CFO that answers from your real numbers.",
+    images: ["https://cashflow-genius.vercel.app/icon-512.png"],
+  },
 };
 
 export const viewport: Viewport = {
