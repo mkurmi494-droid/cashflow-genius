@@ -1656,15 +1656,6 @@ export function App() {
           </button>
           <button
             type="button"
-            className="btn-primary flex shrink-0 items-center gap-1 px-3.5 py-2 text-sm sm:px-4"
-            aria-label="Quick add a transaction"
-            onClick={() => setQuickAddOpen(true)}
-          >
-            <span aria-hidden className="text-base leading-none">＋</span>
-            <span className="hidden md:inline">Add</span>
-          </button>
-          <button
-            type="button"
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg transition ${
               calcOpen ? "bg-[var(--accent)] text-white" : "btn-ghost"
             }`}
