@@ -59,10 +59,14 @@ export async function POST(
   // (the only writes inside getState/getBriefing are first-visit
   // workspace / state-row creates, both guarded by existence checks
   // and onConflictDoNothing), so a retry can never double-apply
-  // anything. Pool exhaustion is transient — an idle connection
-  // drains within seconds — so a read retried a moment later usually
-  // succeeds, and the client keeps showing its loading skeleton
-  // instead of the full-screen "could not be loaded" error.
+  // anything. getInsights is the one exception: a stale read runs the
+  // insight generation, but every write there is an idempotent upsert
+  // by insight_key (plus the runs-row upsert), so a retry can only
+  // refresh the same findings, never duplicate them. Pool exhaustion
+  // is transient — an idle connection drains within seconds — so a
+  // read retried a moment later usually succeeds, and the client
+  // keeps showing its loading skeleton instead of the full-screen
+  // "could not be loaded" error.
   // Delays (1s, 3s, 6s) span the idle drain; worst case the read
   // takes ~10s, still far better than failing outright. Mutations
   // are NEVER retried here: a half-applied write must not run twice.
@@ -70,6 +74,7 @@ export async function POST(
     "getState",
     "getCombinedSummary",
     "getBriefing",
+    "getInsights",
     "authStatus",
     "getSupabaseAuthStatus",
     "getIntegrationStatus",
