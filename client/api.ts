@@ -205,6 +205,14 @@ const LEDGER_READ_ACTIONS = new Set([
 // full reload. 30s is far above a healthy read (the server's own
 // pool retries span ~10s worst case); on expiry the read fails fast,
 // the chain advances, and the query's own retry runs it again.
+// That fetch-only bound was NOT enough (2026-11-19): the queue wait
+// itself is unbounded, so a read enqueued behind slow reads could
+// stay pending for (reads ahead x 30s) + 30s per attempt — the
+// combined panel took ~117s to reach its error state on a cold load.
+// So the caller's total wait (queue + fetch) is bounded at 30s from
+// enqueue as well (see callActionQueued); the chain still tracks the
+// real promise, so a background fetch that outlives the caller's
+// timeout keeps running and is simply discarded.
 const LEDGER_READ_TIMEOUT_MS = 30_000;
 const LEDGER_READ_TIMEOUT_MESSAGE =
   "The connection seems stuck — nothing was lost. Check your internet connection, then try again.";
@@ -215,6 +223,16 @@ function callActionQueued(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!LEDGER_READ_ACTIONS.has(name)) return callAction(name, args);
+  // TWO bounds, both needed. (1) The fetch itself is bounded at 30s
+  // so a stalled read settles and the chain advances — the NEXT
+  // queued read can start. (2) The caller's total wait (queue +
+  // fetch) is bounded at 30s from enqueue: without it, a read stuck
+  // behind slow reads stays pending for (reads ahead x 30s) + 30s per
+  // attempt, and the panel shows a skeleton for ~2min before its
+  // error state. The chain still tracks the real promise, so a
+  // background fetch that outlives the caller's timeout keeps running
+  // to completion and is simply discarded; only this caller gives
+  // up early.
   const run = () =>
     withTimeout(
       callAction(name, args),
@@ -223,7 +241,7 @@ function callActionQueued(
     );
   const p = ledgerReadQueue.then(run, run);
   ledgerReadQueue = p.catch(() => {});
-  return p;
+  return withTimeout(p, LEDGER_READ_TIMEOUT_MS, LEDGER_READ_TIMEOUT_MESSAGE);
 }
 
 // Every action call automatically carries the session token; the server
