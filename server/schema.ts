@@ -2,7 +2,8 @@
 // Money is stored as integer minor units (paise/cents)
 // so every calculation is exact decimal arithmetic — never floats.
 
-import { bigint, integer, pgTable, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { bigint, integer, jsonb, pgTable, primaryKey, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 // ---------- accounts (local workspace authentication) ----------
 // Account rows live here with salted PBKDF2 password hashes and
@@ -506,3 +507,87 @@ export const customCategories = pgTable("custom_categories", {
     .notNull()
     .defaultNow(),
 });
+
+// ---------- Proactive Financial Insights (Genius Insights) ----------
+// Deterministic, zero-LLM findings computed from the workspace's own
+// rows by server/lib/insights.ts — spending spikes, income drops,
+// unusual transactions, recurring payments, invoice risk, cash
+// shortages, profit leaks and savings opportunities. Nothing here is
+// seeded or invented: every figure in evidence_json comes from a real
+// transaction, invoice, schedule or EMI instalment.
+//
+// One row per finding, keyed by a stable insight_key (type + subject
+// + month where the finding is monthly), so a re-run upserts instead
+// of duplicating. Status is the finding's lifecycle:
+//   active    — shown on the dashboard now.
+//   expected  — the user marked it "this is expected"; kept, refreshed
+//               with new figures, but never shown again as active.
+//   snoozed   — "remind me later"; hidden until expires_at passes,
+//               when the next generation reactivates it.
+//   dismissed — the user dismissed it; never resurrected by generation.
+//   resolved  — the condition no longer holds; kept for history only.
+// The partial unique index enforces at most one ACTIVE row per key —
+// a dismissed/expected/snoozed/resolved row never blocks a fresh
+// active finding with the same key.
+
+export const financialInsights = pgTable(
+  "financial_insights",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().default("legacy"),
+    mode: text("mode").notNull().default("business"), // workspace this insight belongs to
+    insightType: text("insight_type").notNull(), // spending_spike | income_drop | unusual_transaction | recurring_payment | invoice_risk | cash_shortage | profit_leak | savings_opportunity
+    severity: text("severity").notNull(), // info | warning | critical
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    // The exact figures the rule used (paise + counts + dates) — the
+    // UI renders these as the evidence line. jsonb, not a text blob:
+    // Postgres parses it, so a malformed payload can never sneak in.
+    evidenceJson: jsonb("evidence_json").notNull(),
+    recommendedAction: text("recommended_action").notNull().default(""),
+    // 0–100: high >= 80, medium 50–79, low < 50. Set from how much
+    // history the rule had (e.g. 3 full months → 90, 2 months → 70).
+    confidence: integer("confidence").notNull().default(0),
+    status: text("status").notNull().default("active"),
+    insightKey: text("insight_key").notNull(),
+    // When this row was last (re)calculated by a generation run.
+    generatedAt: timestamp("generated_at", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+    // Snooze-until for status = snoozed; null otherwise.
+    expiresAt: timestamp("expires_at", { mode: "date" }),
+    createdAt: timestamp("created_at", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // NOTE: the predicate is a raw sql literal, not eq(t.status,
+    // "active"): drizzle-kit parameterizes eq() here and emits a
+    // broken `WHERE ... = $1` in the migration. The literal below is
+    // what actually runs in Postgres.
+    uniqueIndex("financial_insights_owner_mode_key_active_unique")
+      .on(t.ownerId, t.mode, t.insightKey)
+      .where(sql`"status" = 'active'`),
+  ],
+);
+
+// One row per workspace recording the last generation run, so the
+// dashboard can regenerate lazily (older than 6 hours) without
+// re-running the rules on every load — including for workspaces
+// where no rule fires and therefore no insight row exists to carry
+// a timestamp.
+export const financialInsightRuns = pgTable(
+  "financial_insight_runs",
+  {
+    ownerId: text("owner_id").notNull(),
+    mode: text("mode").notNull().default("business"),
+    generatedAt: timestamp("generated_at", { mode: "date" })
+      .notNull()
+      .defaultNow(),
+    insightCount: integer("insight_count").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.ownerId, t.mode] })],
+);

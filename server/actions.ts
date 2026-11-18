@@ -20,6 +20,12 @@ import {
   loadWorkspaceBatch,
   loadWorkspacePrelude,
 } from "./lib/batch";
+import {
+  detectInsights,
+  confidenceLabel,
+  type GeneratedInsight,
+  type InsightInput,
+} from "./lib/insights";
 
 type Db = typeof db;
 
@@ -1427,6 +1433,273 @@ function txnOut(t: TxnRow) {
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };
+}
+
+// ---------- Proactive Financial Insights (helpers) ----------
+// Pure shape for the dashboard: severity is coerced to the known
+// enum (a row with anything else degrades to "info" instead of
+// failing the response validation), evidence is a plain object.
+type InsightRow = typeof schema.financialInsights.$inferSelect;
+
+function insightOut(row: InsightRow) {
+  const severity: "info" | "warning" | "critical" =
+    row.severity === "critical" || row.severity === "warning" ? row.severity : "info";
+  const evidence =
+    typeof row.evidenceJson === "object" && row.evidenceJson !== null && !Array.isArray(row.evidenceJson)
+      ? (row.evidenceJson as Record<string, unknown>)
+      : {};
+  return {
+    id: row.id,
+    insightType: row.insightType,
+    severity,
+    title: row.title,
+    description: row.description,
+    evidenceJson: evidence,
+    recommendedAction: row.recommendedAction,
+    confidence: row.confidence,
+    confidenceLabel: confidenceLabel(row.confidence),
+    status: row.status,
+    insightKey: row.insightKey,
+    generatedAt: row.generatedAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+  };
+}
+
+/** Moves one ACTIVE insight to a new status. Only the row's own
+ *  owner, in the workspace it belongs to, may do it — the id alone
+ *  is never trusted. Anything not active anymore is left alone with
+ *  a plain message instead of a silent no-op. */
+async function setInsightStatus(
+  db: Db,
+  ownerId: string,
+  mode: AppModeT,
+  id: string,
+  status: "dismissed" | "expected" | "snoozed",
+  expiresAt: Date | null,
+): Promise<void> {
+  const rows = await db
+    .select()
+    .from(schema.financialInsights)
+    .where(eq(schema.financialInsights.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row || row.ownerId !== ownerId || row.mode !== mode)
+    throw new Error("Insight not found.");
+  if (row.status !== "active")
+    throw new Error("This insight is no longer active.");
+  await db
+    .update(schema.financialInsights)
+    .set({ status, expiresAt, updatedAt: new Date() })
+    .where(eq(schema.financialInsights.id, id));
+}
+
+/**
+ * Runs the deterministic insight rules for one workspace and syncs
+ * the findings into financial_insights:
+ *   - new finding        → insert as active
+ *   - still firing       → refresh figures, keep its status
+ *     (a snoozed one whose 7 days are up wakes back to active)
+ *   - dismissed          → never touched, never resurrected
+ *   - condition cleared  → active/expected/snoozed → resolved
+ * A 60-second guard keeps a burst of mutations from re-running the
+ * rules over and over — the caller (dashboard load, mutation hook)
+ * may call this freely. One batch load + a handful of upserts; no
+ * LLM, no extra cost.
+ */
+async function runInsightGeneration(
+  db: Db,
+  ownerId: string,
+  mode: AppModeT,
+): Promise<{ skipped: boolean; generated: number; active: number }> {
+  const now = new Date();
+  const runs = await db
+    .select()
+    .from(schema.financialInsightRuns)
+    .where(
+      and(
+        eq(schema.financialInsightRuns.ownerId, ownerId),
+        eq(schema.financialInsightRuns.mode, mode),
+      ),
+    )
+    .limit(1);
+  if (runs[0] && Date.now() - runs[0].generatedAt.getTime() < 60_000) {
+    const actives = await db
+      .select({ id: schema.financialInsights.id })
+      .from(schema.financialInsights)
+      .where(
+        and(
+          eq(schema.financialInsights.ownerId, ownerId),
+          eq(schema.financialInsights.mode, mode),
+          eq(schema.financialInsights.status, "active"),
+        ),
+      );
+    return { skipped: true, generated: 0, active: actives.length };
+  }
+
+  // One statement for every collection in the workspace, plus the
+  // state row + workspace rows for the opening balance (same batch
+  // loaders getState uses — 2 statements, pool-friendly).
+  const { businesses: workspaceRows } = await loadWorkspacePrelude(db, ownerId);
+  const business = workspaceRows.find((b) => asMode(b.mode) === mode);
+  const {
+    transactions: txns,
+    invoices: invs,
+    invoiceItems: items,
+    recurring: rec,
+    emiInstalments: emiInstRows,
+    savingsTransfers: savingsTransferRows,
+  } = await loadWorkspaceBatch(db, ownerId, mode);
+  const itemsByInv = new Map<string, ItemRow[]>();
+  for (const it of items) {
+    const arr = itemsByInv.get(it.invoiceId) ?? [];
+    arr.push(it);
+    itemsByInv.set(it.invoiceId, arr);
+  }
+  const savedCents = savingsTransferRows.reduce(
+    (s, tr) => s + (tr.direction === "deposit" ? tr.amountCents : -tr.amountCents),
+    0,
+  );
+  const input: InsightInput = {
+    openingBalanceCents: business?.openingBalanceCents ?? 0,
+    savedCents,
+    transactions: txns.map((t) => ({
+      id: t.id,
+      type: t.type as "income" | "expense",
+      status: t.status as "posted" | "pending",
+      category: t.category,
+      description: t.description,
+      counterparty: t.counterparty,
+      amountCents: t.amountCents,
+      date: t.date,
+    })),
+    invoices: invs.map((inv) => ({
+      id: inv.id,
+      number: inv.number,
+      customerName: inv.customerName,
+      status: inv.status,
+      dueDate: inv.dueDate,
+      totalCents: invoiceTotals(inv, itemsByInv.get(inv.id) ?? []).total,
+    })),
+    recurring: rec.map((r) => ({
+      id: r.id,
+      type: r.type as "income" | "expense",
+      category: r.category,
+      description: r.description,
+      amountCents: r.amountCents,
+      frequency: r.frequency as "weekly" | "monthly",
+      nextDate: r.nextDate,
+      active: r.active === 1,
+    })),
+    // EMI instalments of this workspace's plans only: the batch
+    // already scopes instalments to the workspace's plans.
+    emiInstalments: emiInstRows.map((inst) => ({
+      id: inst.id,
+      dueDate: inst.dueDate,
+      amountCents: inst.amountCents,
+      status: inst.status as "pending" | "paid",
+    })),
+  };
+  const candidates: GeneratedInsight[] = detectInsights(input);
+  const candidateKeys = new Set(candidates.map((c) => c.insightKey));
+
+  const existing = await db
+    .select()
+    .from(schema.financialInsights)
+    .where(
+      and(
+        eq(schema.financialInsights.ownerId, ownerId),
+        eq(schema.financialInsights.mode, mode),
+      ),
+    );
+  const byKey = new Map(existing.map((row) => [row.insightKey, row]));
+
+  for (const c of candidates) {
+    const row = byKey.get(c.insightKey);
+    const values = {
+      insightType: c.type,
+      severity: c.severity,
+      title: c.title,
+      description: c.description,
+      evidenceJson: c.evidence as Record<string, unknown>,
+      recommendedAction: c.recommendedAction,
+      confidence: c.confidence,
+      generatedAt: now,
+      updatedAt: now,
+    };
+    if (!row) {
+      // Fresh finding — insert as active. (The partial unique index
+      // on active keys is the backstop; the select above is the
+      // normal guard, so a duplicate insert cannot happen here.)
+      await db.insert(schema.financialInsights).values({
+        id: uid(),
+        ownerId,
+        mode,
+        insightKey: c.insightKey,
+        status: "active",
+        expiresAt: null,
+        ...values,
+      });
+      continue;
+    }
+    if (row.status === "dismissed") continue; // the user said no — frozen
+    if (row.status === "expected") {
+      // Marked "this is expected": refresh the figures so the record
+      // stays current, but NEVER show it as active again for this key.
+      await db
+        .update(schema.financialInsights)
+        .set(values)
+        .where(eq(schema.financialInsights.id, row.id));
+      continue;
+    }
+    if (row.status === "snoozed" && row.expiresAt && row.expiresAt.getTime() > now.getTime()) {
+      // Still snoozed: refresh the figures, stay hidden.
+      await db
+        .update(schema.financialInsights)
+        .set(values)
+        .where(eq(schema.financialInsights.id, row.id));
+      continue;
+    }
+    // Active, resolved, or an expired snooze: refresh the figures
+    // and (re)activate, clearing any old snooze deadline.
+    await db
+      .update(schema.financialInsights)
+      .set({ ...values, status: "active", expiresAt: null })
+      .where(eq(schema.financialInsights.id, row.id));
+  }
+
+  // Conditions that no longer hold resolve — except dismissed rows,
+  // which stay dismissed forever for their key.
+  for (const row of existing) {
+    if (
+      (row.status === "active" || row.status === "expected" || row.status === "snoozed") &&
+      !candidateKeys.has(row.insightKey)
+    ) {
+      await db
+        .update(schema.financialInsights)
+        .set({ status: "resolved", expiresAt: null, updatedAt: now })
+        .where(eq(schema.financialInsights.id, row.id));
+    }
+  }
+
+  const actives = await db
+    .select({ id: schema.financialInsights.id })
+    .from(schema.financialInsights)
+    .where(
+      and(
+        eq(schema.financialInsights.ownerId, ownerId),
+        eq(schema.financialInsights.mode, mode),
+        eq(schema.financialInsights.status, "active"),
+      ),
+    );
+  await db
+    .insert(schema.financialInsightRuns)
+    .values({ ownerId, mode, generatedAt: now, insightCount: actives.length })
+    .onConflictDoUpdate({
+      target: [schema.financialInsightRuns.ownerId, schema.financialInsightRuns.mode],
+      set: { generatedAt: now, insightCount: actives.length },
+    });
+  return { skipped: false, generated: candidates.length, active: actives.length };
 }
 
 export const Actions = {
@@ -4207,6 +4480,177 @@ export const Actions = {
       }
       await log(db, "Profit scan run", `${findings.length} findings from ${txns.length} transactions`, user.id);
       return { findings, scannedCount: txns.length };
+    },
+  }),
+
+  // ---------- Proactive Financial Insights (Genius Insights) ----------
+  // The AI noticing problems WITHOUT being asked. All detection is
+  // deterministic SQL + TypeScript rules (server/lib/insights.ts) —
+  // zero LLM calls, zero extra cost. Generation runs lazily (see
+  // getInsights, 6-hour staleness) and after ledger mutations (the
+  // client fires generateInsights from the cg:mutated listener in
+  // App.tsx). It upserts by insight_key, so a re-run never
+  // duplicates a finding; findings whose condition cleared resolve.
+  getInsights: defineAction({
+    description:
+      "Lists the active Genius Insights for the signed-in workspace, regenerating them first when the last run is older than 6 hours.",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({
+      insights: z.array(
+        z.object({
+          id: z.string(),
+          insightType: z.string(),
+          severity: z.enum(["info", "warning", "critical"]),
+          title: z.string(),
+          description: z.string(),
+          evidenceJson: z.record(z.string(), z.unknown()),
+          recommendedAction: z.string(),
+          confidence: z.number(),
+          confidenceLabel: z.enum(["high", "medium", "low"]),
+          status: z.string(),
+          insightKey: z.string(),
+          generatedAt: z.string(),
+          createdAt: z.string(),
+          expiresAt: z.string().nullable(),
+        }),
+      ),
+      generatedAt: z.string().nullable(),
+      generatedFresh: z.boolean(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      try {
+        const runs = await db
+          .select()
+          .from(schema.financialInsightRuns)
+          .where(
+            and(
+              eq(schema.financialInsightRuns.ownerId, user.id),
+              eq(schema.financialInsightRuns.mode, wsMode),
+            ),
+          )
+          .limit(1);
+        const lastRun = runs[0]?.generatedAt ?? null;
+        const stale =
+          !lastRun || Date.now() - lastRun.getTime() > 6 * 3600 * 1000;
+        let generatedFresh = false;
+        if (stale) {
+          const res = await runInsightGeneration(db, user.id, wsMode);
+          generatedFresh = !res.skipped;
+        }
+        const rows = await db
+          .select()
+          .from(schema.financialInsights)
+          .where(
+            and(
+              eq(schema.financialInsights.ownerId, user.id),
+              eq(schema.financialInsights.mode, wsMode),
+              eq(schema.financialInsights.status, "active"),
+            ),
+          );
+        const rank: Record<string, number> = {
+          critical: 0,
+          warning: 1,
+          info: 2,
+        };
+        rows.sort(
+          (a, b) =>
+            (rank[a.severity] ?? 2) - (rank[b.severity] ?? 2) ||
+            b.generatedAt.getTime() - a.generatedAt.getTime(),
+        );
+        const runRow = (
+          await db
+            .select()
+            .from(schema.financialInsightRuns)
+            .where(
+              and(
+                eq(schema.financialInsightRuns.ownerId, user.id),
+                eq(schema.financialInsightRuns.mode, wsMode),
+              ),
+            )
+            .limit(1)
+        )[0];
+        return {
+          insights: rows.map(insightOut),
+          generatedAt: runRow?.generatedAt.toISOString() ?? null,
+          generatedFresh,
+        };
+      } catch (e) {
+        // The code can ship before migration 0004 is applied: until
+        // the financial_insights tables exist, report an honest empty
+        // list (the dashboard shows its "nothing needs attention"
+        // state) instead of breaking the whole dashboard. The missing
+        // migration is logged server-side so it cannot hide.
+        if (dbErrorCode(e) === "42P01") {
+          console.error(
+            "[cashflow-genius] getInsights: financial_insights tables missing — apply drizzle/0004_financial_insights.sql",
+          );
+          return { insights: [], generatedAt: null, generatedFresh: false };
+        }
+        throw e;
+      }
+    },
+  }),
+
+  generateInsights: defineAction({
+    description:
+      "Re-runs the deterministic insight rules for the signed-in workspace now (upserts findings, resolves stale ones).",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({
+      generated: z.number(),
+      active: z.number(),
+      skipped: z.boolean(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      return runInsightGeneration(db, user.id, wsMode);
+    },
+  }),
+
+  dismissInsight: defineAction({
+    description:
+      "Dismisses one active insight in the signed-in workspace. Dismissed insights are never resurrected by a later generation run.",
+    request: z.object({ token: z.string().max(200).optional(), id: z.string() }),
+    response: okShape,
+    async handler(ctx, args): Promise<z.infer<typeof okShape>> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      await setInsightStatus(db, user.id, wsMode, args.id, "dismissed", null);
+      return { ok: true as const };
+    },
+  }),
+
+  markInsightExpected: defineAction({
+    description:
+      "Marks one active insight as expected in the signed-in workspace: it stays out of the active list and is never shown as a new finding, but its figures keep refreshing.",
+    request: z.object({ token: z.string().max(200).optional(), id: z.string() }),
+    response: okShape,
+    async handler(ctx, args): Promise<z.infer<typeof okShape>> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      await setInsightStatus(db, user.id, wsMode, args.id, "expected", null);
+      return { ok: true as const };
+    },
+  }),
+
+  snoozeInsight: defineAction({
+    description:
+      "Snoozes one active insight for 7 days in the signed-in workspace. It hides until the snooze expires, when the next generation reactivates it if the condition still holds.",
+    request: z.object({ token: z.string().max(200).optional(), id: z.string() }),
+    response: okShape,
+    async handler(ctx, args): Promise<z.infer<typeof okShape>> {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const until = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      await setInsightStatus(db, user.id, wsMode, args.id, "snoozed", until);
+      return { ok: true as const };
     },
   }),
 
