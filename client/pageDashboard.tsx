@@ -177,7 +177,7 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
                     {w.recurringCount > 0 ? ` · ${w.recurringCount} recurring` : ""}
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-                    🪙 <strong className="tnum text-[var(--accent)]">Saved in pots: {fmtMoney(w.savedCents, cur)}</strong>
+                    🪙 <strong className="tnum text-[var(--accent)]">Saved in pots:{" "}{fmtMoney(w.savedCents, cur)}</strong>
                     {w.savingsGoalCount > 0
                       ? ` across ${w.savingsGoalCount} goal(s) in ${w.label} only`
                       : ` — no savings goals in ${w.label} yet`}
@@ -486,7 +486,7 @@ function GeniusInsightsPanel({ state, go, notify }: { state: PageProps["state"];
                     <p className="tnum mt-1.5 text-xs font-bold text-[var(--accent)]">{ev}</p>
                   ) : null}
                   {ins.recommendedAction ? (
-                    <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">Suggested: {ins.recommendedAction}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">Suggested:{" "}{ins.recommendedAction}</p>
                   ) : null}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <button
