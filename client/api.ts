@@ -124,6 +124,11 @@ const READ_ONLY_ACTIONS = new Set([
   "listNoteVersions",
   "requestPasswordReset",
   "resendEmailOtp",
+  // generateInsights only upserts insight rows — it never touches the
+  // ledger getState reads, so it must not dispatch cg:mutated (which
+  // would refetch the whole ledger for nothing). The App listener
+  // invalidates ["cg-insights"] itself after firing it.
+  "generateInsights",
 ]);
 
 function notifyMutation(
@@ -187,6 +192,10 @@ const LEDGER_READ_ACTIONS = new Set([
   "getState",
   "getCombinedSummary",
   "getBriefing",
+  // getInsights can trigger a generation run (batch load + upserts),
+  // so it queues with the other ledger reads instead of holding a
+  // second pool slot during a dashboard load or mode switch.
+  "getInsights",
 ]);
 let ledgerReadQueue: Promise<unknown> = Promise.resolve();
 

@@ -14,7 +14,7 @@ Tooltip,
 XAxis,
 YAxis,
 } from "recharts";
-import { api } from "./api";
+import { api, type ApiResponse } from "./api";
 import {
 APP_MODES,
 MODE_ICONS,
@@ -297,6 +297,246 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
   );
 }
 
+// ---------- Genius Insights ----------
+// Proactive findings computed from THIS workspace's own rows by
+// deterministic rules (server/lib/insights.ts) — no AI call, no
+// extra cost. The server regenerates them lazily (older than 6
+// hours) and after ledger mutations; this panel only reads them and
+// lets the user act: Dismiss, Expected, Remind me later, or Review
+// in Money Flow. Nothing here is seeded or invented — every figure
+// comes from a real transaction, invoice, schedule or EMI.
+type GeniusInsight = ApiResponse<typeof api, "getInsights">["insights"][number];
+
+function evidenceLine(ins: GeniusInsight, cur: string): string | null {
+  const ev = ins.evidenceJson as Record<string, unknown>;
+  const num = (k: string): number | null =>
+    typeof ev[k] === "number" ? (ev[k] as number) : null;
+  const str = (k: string): string =>
+    typeof ev[k] === "string" ? (ev[k] as string) : "";
+  switch (ins.insightType) {
+    case "spending_spike": {
+      const c = num("currentMonthCents");
+      const a = num("avgMonthCents");
+      const p = num("pctAbove");
+      return c != null && a != null
+        ? `${str("category")} · ${fmtMoney(c, cur)} vs usual ${fmtMoney(a, cur)}${p != null ? ` · +${p}%` : ""}`
+        : null;
+    }
+    case "income_drop": {
+      const c = num("currentMonthCents");
+      const a = num("avgMonthCents");
+      const p = num("pctBelow");
+      return c != null && a != null
+        ? `Income ${fmtMoney(c, cur)} vs usual ${fmtMoney(a, cur)}${p != null ? ` · −${p}%` : ""}`
+        : null;
+    }
+    case "unusual_transaction": {
+      const a = num("amountCents");
+      const m = num("medianCents");
+      const x = num("multiple");
+      return a != null && m != null
+        ? `${str("description")} · ${fmtMoney(a, cur)} vs median ${fmtMoney(m, cur)}${x != null ? ` · ${x}x` : ""}`
+        : null;
+    }
+    case "recurring_payment": {
+      const a = num("amountCents");
+      const months = num("months");
+      return a != null
+        ? `${str("payee")} · ${fmtMoney(a, cur)} a month${months != null ? ` · ${months} months in a row` : ""}`
+        : null;
+    }
+    case "invoice_risk": {
+      const u = num("unpaidCents");
+      const uc = num("unpaidCount");
+      const oc = num("overdueCount");
+      return u != null && uc != null
+        ? `${uc} unpaid · ${fmtMoney(u, cur)}${oc != null && oc > 0 ? ` · ${oc} overdue` : ""}`
+        : null;
+    }
+    case "cash_shortage": {
+      const low = num("minBalanceCents");
+      const inC = num("expectedInCents");
+      const outC = num("expectedOutCents");
+      return low != null
+        ? `Low ${fmtMoney(low, cur)}${str("minDate") ? ` on ${prettyDate(str("minDate"))}` : ""}${inC != null && outC != null ? ` · in ${fmtMoney(inC, cur)} / out ${fmtMoney(outC, cur)}` : ""}`
+        : null;
+    }
+    case "profit_leak": {
+      const c = num("currentMonthCents");
+      const p = num("previousMonthCents");
+      const pct = num("pctIncrease");
+      return c != null && p != null
+        ? `${str("category")} · ${fmtMoney(c, cur)} vs ${fmtMoney(p, cur)} last month${pct != null ? ` · +${pct}%` : ""}`
+        : null;
+    }
+    case "savings_opportunity": {
+      const c = num("currentMonthCents");
+      const p = num("previousMonthCents");
+      const s = num("savedCents");
+      return c != null && p != null
+        ? `${str("category")} · ${fmtMoney(c, cur)} vs ${fmtMoney(p, cur)} last month${s != null ? ` · ${fmtMoney(s, cur)} saved` : ""}`
+        : null;
+    }
+    default:
+      return null;
+  }
+}
+
+const INSIGHT_SEVERITY: Record<string, { label: string; tone: "err" | "warn" | "ai"; border: string }> = {
+  critical: { label: "Needs attention now", tone: "err", border: "border-l-[#e11d63]" },
+  warning: { label: "Worth a look", tone: "warn", border: "border-l-[#d97706]" },
+  info: { label: "Heads up", tone: "ai", border: "border-l-[#7c3aed]" },
+};
+
+function GeniusInsightsPanel({ state, go, notify }: { state: PageProps["state"]; go: PageProps["go"]; notify: PageProps["notify"] }) {
+  const queryClient = useQueryClient();
+  const cur = state.business.currency;
+  const insightsQ = useQuery({
+    queryKey: ["cg-insights", state.activeMode],
+    queryFn: () => api.getInsights({}),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+  const act = useMutation({
+    mutationFn: ({ kind, id }: { kind: "dismiss" | "expected" | "snooze"; id: string }) =>
+      kind === "dismiss"
+        ? api.dismissInsight({ id })
+        : kind === "expected"
+          ? api.markInsightExpected({ id })
+          : api.snoozeInsight({ id }),
+    onSuccess: (_res, { kind }) => {
+      void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
+      notify(
+        kind === "snooze"
+          ? "Got it — reminding you about this in 7 days."
+          : kind === "expected"
+            ? "Marked as expected — it will not be flagged again."
+            : "Insight dismissed.",
+      );
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+  const refresh = useMutation({
+    mutationFn: () => api.generateInsights({}),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
+      notify("Insights re-checked from your latest records.");
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
+
+  const insights = insightsQ.data?.insights ?? [];
+  const generatedAt = insightsQ.data?.generatedAt ?? null;
+  const checkedLabel = insightsQ.data?.generatedFresh
+    ? "Checked just now"
+    : generatedAt
+      ? `Last checked ${new Date(generatedAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`
+      : null;
+
+  return (
+    <section className="card p-5 sm:p-6" aria-label="Genius Insights">
+      <SectionTitle
+        title="✦ Genius Insights"
+        hint="Things the app noticed in this workspace — checked from your real records, with no AI call. Estimates only, never predictions."
+        action={
+          <button
+            type="button"
+            className="btn-ghost shrink-0 px-3 py-1.5 text-xs"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+          >
+            {refresh.isPending ? "Checking…" : "Re-check"}
+          </button>
+        }
+      />
+      {insightsQ.isPending ? (
+        <div className="space-y-3" aria-busy="true" aria-label="Loading insights">
+          <div className="skeleton h-20" />
+          <div className="skeleton h-20" />
+        </div>
+      ) : insightsQ.isError || !insightsQ.data ? (
+        <div className="rounded-xl bg-[var(--err)] p-3 text-sm text-[var(--err-text)]">
+          Insights could not load just now. Your figures above are unaffected.{" "}
+          <button type="button" className="font-bold underline" onClick={() => void insightsQ.refetch()}>
+            Try again
+          </button>
+        </div>
+      ) : insights.length === 0 ? (
+        <p className="text-sm leading-relaxed text-[var(--dim)]">
+          No insights need attention right now — your numbers look steady.
+          {checkedLabel ? ` ${checkedLabel}.` : ""}
+        </p>
+      ) : (
+        <>
+          <ul className="space-y-3">
+            {insights.map((ins) => {
+              const sev = INSIGHT_SEVERITY[ins.severity] ?? INSIGHT_SEVERITY.info!;
+              const ev = evidenceLine(ins, cur);
+              return (
+                <li
+                  key={ins.id}
+                  className={`rounded-3xl border border-l-4 border-[var(--border)] bg-white p-4 ${sev.border}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 text-sm font-extrabold leading-snug">{ins.title}</p>
+                    <Badge tone={sev.tone}>{sev.label}</Badge>
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-[var(--dim)]">{ins.description}</p>
+                  {ev ? (
+                    <p className="tnum mt-1.5 text-xs font-bold text-[var(--accent)]">{ev}</p>
+                  ) : null}
+                  {ins.recommendedAction ? (
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">Suggested: {ins.recommendedAction}</p>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary px-3 py-1.5 text-xs"
+                      onClick={() => go("money-flow")}
+                    >
+                      Review →
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost px-3 py-1.5 text-xs"
+                      disabled={act.isPending}
+                      onClick={() => act.mutate({ kind: "expected", id: ins.id })}
+                    >
+                      Expected
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost px-3 py-1.5 text-xs"
+                      disabled={act.isPending}
+                      onClick={() => act.mutate({ kind: "snooze", id: ins.id })}
+                    >
+                      Remind me later
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost px-3 py-1.5 text-xs"
+                      disabled={act.isPending}
+                      onClick={() => act.mutate({ kind: "dismiss", id: ins.id })}
+                    >
+                      Dismiss
+                    </button>
+                    <span className="ml-auto text-[11px] text-[var(--dim)]">
+                      Confidence: {ins.confidenceLabel}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {checkedLabel ? (
+            <p className="mt-3 text-xs text-[var(--dim)]">{checkedLabel} · re-checked automatically after new transactions, imports and invoice changes.</p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
 export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTour }: PageProps) {
   const cur = state.business.currency;
   const personal = isPersonalLike(modeOf(state));
@@ -553,6 +793,10 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
           </div>
         </div>
       </section>
+
+      {/* Genius Insights — proactive findings from this workspace's
+          own records, right under the hero so they are seen first. */}
+      <Reveal><GeniusInsightsPanel state={state} go={go} notify={notify} /></Reveal>
 
       {/* KPIs */}
       <section aria-label="Key financial figures">

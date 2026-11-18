@@ -794,6 +794,29 @@ export function App() {
     };
   }, [wsMenuOpen]);
   useEffect(() => {
+    // Mutations whose data the insight rules read (transactions,
+    // invoices, recurring schedules, EMI plans): after one lands, the
+    // findings may have changed, so regenerate them in the background
+    // and refresh the Genius Insights panel when the run lands.
+    // generateInsights itself is a read-only action for the event
+    // system (it never touches the ledger), so this cannot loop.
+    const INSIGHT_DATA_ACTIONS = new Set([
+      "saveTransaction",
+      "deleteTransaction",
+      "importTransactions",
+      "undoLastImport",
+      "saveInvoice",
+      "setInvoiceStatus",
+      "markInvoicePaid",
+      "deleteInvoice",
+      "saveRecurring",
+      "deleteRecurring",
+      "saveEmiPlan",
+      "deleteEmiPlan",
+      "collectEmiInstalment",
+      "restoreDeletedItem",
+      "restoreBackup",
+    ]);
     const onMutated = (e: Event) => {
       const detail = (e as CustomEvent<MutationDetail>).detail;
       if (detail) {
@@ -813,7 +836,20 @@ export function App() {
         void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
         void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
         void queryClient.invalidateQueries({ queryKey: ["note-versions"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
       })();
+      if (detail && INSIGHT_DATA_ACTIONS.has(detail.action)) {
+        // Fire-and-forget: the server debounces runs to one per
+        // minute, and the panel refreshes when this run lands.
+        // A failure here must never surface as an error — the panel
+        // still shows the last good findings.
+        void api
+          .generateInsights({})
+          .catch(() => null)
+          .then(() => {
+            void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
+          });
+      }
     };
     window.addEventListener("cg:mutated", onMutated);
     return () => window.removeEventListener("cg:mutated", onMutated);
