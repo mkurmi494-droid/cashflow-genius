@@ -250,6 +250,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
   };
 
   return (
+         <>
     <div className="page-anim space-y-6 pb-8">
       <section className="card relative overflow-hidden p-5 sm:p-6">
         <div
@@ -465,34 +466,42 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
             ) : null}
           </div>
 
-          <form
-            className="card fixed inset-x-4 bottom-16 z-30 flex flex-row gap-2 p-3 shadow-[0_-8px_24px_rgba(76,29,149,0.10)] lg:sticky lg:inset-x-0 lg:bottom-0 lg:gap-3 lg:p-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              submit(question);
-            }}
-          >
-            <label className="sr-only" htmlFor="cfo-question">
-              Ask the AI CFO a question
-            </label>
-            <input
-              id="cfo-question"
-              className="field flex-1"
-              placeholder="Ask anything"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              maxLength={1000}
-            />
-            <button
-              type="submit"
-              className="btn-primary shrink-0 px-4 py-2.5 text-sm sm:px-6"
-              disabled={ask.isPending || question.trim().length < 2}
-            >
-              {ask.isPending ? "Thinking…" : "Ask AI CFO"}
-            </button>
-          </form>
         </div>
       </div>
     </div>
+    {/* The composer sits OUTSIDE .page-anim on purpose. .page-anim runs an
+        entrance animation, and any transform on an ancestor — even one left
+        over after the animation finishes — makes that ancestor the
+        containing block for position:fixed, so the composer scrolled away
+        with the page instead of staying pinned. Outside the animated
+        subtree, fixed bottom-16 pins it to the viewport itself (just above
+        the mobile bottom nav) on every load — in the AI CFO tab only. */}
+    <form
+      className="card fixed inset-x-4 bottom-16 z-30 flex flex-row gap-2 p-3 shadow-[0_-8px_24px_rgba(76,29,149,0.10)] lg:sticky lg:inset-x-0 lg:bottom-0 lg:gap-3 lg:p-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit(question);
+      }}
+    >
+      <label className="sr-only" htmlFor="cfo-question">
+        Ask the AI CFO a question
+      </label>
+      <input
+        id="cfo-question"
+        className="field flex-1"
+        placeholder="Ask anything"
+        value={question}
+        onChange={(e) => setQuestion(e.target.value)}
+        maxLength={1000}
+      />
+      <button
+        type="submit"
+        className="btn-primary shrink-0 px-4 py-2.5 text-sm sm:px-6"
+        disabled={ask.isPending || question.trim().length < 2}
+      >
+        {ask.isPending ? "Thinking…" : "Ask AI CFO"}
+      </button>
+    </form>
+    </>
   );
 }
