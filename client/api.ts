@@ -124,6 +124,17 @@ const READ_ONLY_ACTIONS = new Set([
   "listNoteVersions",
   "requestPasswordReset",
   "resendEmailOtp",
+  // getInsights and getBriefing are pure reads that run on every
+  // dashboard mount — they MUST be here. Missing them (2026-11-19)
+  // made each success dispatch "cg:mutated", and the App listener
+  // answers that by cancelling + invalidating ["cg-combined"] (and
+  // ["cg-insights"], which refetches getInsights and dispatches
+  // again — a self-loop). Each restart re-enqueued the combined read
+  // behind the serial ledger queue and reset its 30s clock, so on a
+  // slow/cold load the Personal + Business panel never reached data
+  // OR its error box — it sat on skeletons past 75s live.
+  "getInsights",
+  "getBriefing",
   // generateInsights only upserts insight rows — it never touches the
   // ledger getState reads, so it must not dispatch cg:mutated (which
   // would refetch the whole ledger for nothing). The App listener
