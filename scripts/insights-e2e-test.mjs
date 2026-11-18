@@ -204,6 +204,36 @@ try {
   check("business list has no personal cash_shortage", res.insights.some((i) => i.insightType === "cash_shortage"), false);
   check("business list keeps its own insights", res.insights.some((i) => i.insightType === "unusual_transaction"), true);
 
+  // ---- live scenario (19 Nov 2026, Business): ₹3,440 cash, ₹8,20,000
+  // expected in, ₹0 scheduled out — the copy must say the cash STAYS
+  // at ₹3,440 until the collection lands, never that it "falls", and
+  // the low date must be today in IST, not yesterday's UTC date.
+  // Run in Personal (cleaner than Business, which already carries
+  // dismissed/snoozed rows): remove the rent schedule, set the
+  // opening to ₹3,440, add one sent invoice due 24 Nov.
+  await call("setMode", { mode: "personal" });
+  sql(`DELETE FROM recurring_cashflows WHERE owner_id = '${USER_ID}'`);
+  await call("updateBusiness", {
+    mode: "personal", name: "My Money", industry: "", country: "India", currency: "INR",
+    openingBalanceCents: rs(3440), timezone: "Asia/Kolkata", ownerName: "", ownerEmail: "", ownerPhone: "",
+    gstRateBp: 1800, gstInclusive: true, eligibleExpensePct: 60, onboarded: true,
+  });
+  await call("saveInvoice", {
+    number: "INV-E2E-002", customerName: "Acme", customerEmail: "", status: "sent",
+    issueDate: "2026-11-01", dueDate: "2026-11-24", discountPct: 0, taxPct: 0, notes: "",
+    items: [{ description: "Work", qty: 1, unitPriceCents: rs(820000) }],
+  });
+  sql(`UPDATE financial_insight_runs SET generated_at = now() - interval '7 hours' WHERE owner_id = '${USER_ID}' AND mode = 'personal'`);
+  res = await call("getInsights");
+  const liveShortage = res.insights.find((i) => i.insightType === "cash_shortage");
+  check("live scenario: cash_shortage fires", !!liveShortage, true);
+  check("live scenario: title says stays at", liveShortage?.title.includes("stays at"), true);
+  check("live scenario: title never says fall", liveShortage?.title.includes("fall"), false);
+  check("live scenario: description never says fall", liveShortage?.description.includes("fall"), false);
+  check("live scenario: title names the expected inflow", liveShortage?.title.includes("₹8,20,000"), true);
+  const wantIst = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  check("live scenario: low date is today (IST), not yesterday", liveShortage?.evidenceJson.minDate, wantIst);
+
   // ---- guards: another user's id, and the partial unique index ----
   const wrong = await callExpectError("dismissInsight", { id: "00000000-0000-0000-0000-000000000000" });
   check("unknown insight id is rejected", wrong.status, 400);

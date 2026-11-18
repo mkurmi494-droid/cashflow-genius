@@ -50,7 +50,7 @@ try {
     fileName: "insights.ts",
   }).outputText;
   writeFileSync(join(out, "insights.js"), js);
-  const { detectInsights, confidenceLabel, formatINR } = require(join(out, "insights.js"));
+  const { detectInsights, confidenceLabel, formatINR, todayStrIst, formatDateShort } = require(join(out, "insights.js"));
 
   const txn = (id, type, category, amount, date, extra = {}) => ({
     id,
@@ -216,6 +216,60 @@ try {
   check("cash_shortage minDate", shortage?.evidence.minDate, "2026-11-25");
   check("cash_shortage severity critical below zero", shortage?.severity, "critical");
   check("cash_shortage description says estimate", shortage?.description.includes("estimate"), true);
+  check("cash_shortage below-zero title", shortage?.title, "Cash is estimated to go below zero — −₹10,000 on 25 Nov 2026");
+
+  // A real decline above zero still says "fall" — with a readable date:
+  // ₹10,000 cash, ₹6,000 rent on 25 Nov → min ₹4,000 on 25 Nov.
+  ins = detectInsights(base({
+    openingBalanceCents: rs(10000),
+    recurring: [{ id: "r1", type: "expense", category: "Rent", description: "Rent", amountCents: rs(6000), frequency: "monthly", nextDate: "2026-11-25", active: true }],
+  }));
+  const fall = ofType(ins, "cash_shortage");
+  check("cash_shortage decline title says fall", fall?.title, "Cash is estimated to fall to ₹4,000 on 25 Nov 2026");
+  check("cash_shortage decline description keeps estimate", fall?.description.includes("estimate"), true);
+
+  // LIVE SCENARIO (19 Nov 2026, Business): ₹3,440 cash, ₹8,20,000
+  // expected in, ₹0 scheduled out. The cash does NOT fall — it sits
+  // at ₹3,440 until the collection lands — so the copy must never say
+  // "fall", and the low date must be the IST today (19 Nov), never
+  // yesterday's UTC date (18 Nov).
+  const live = base({
+    today: "2026-11-19",
+    openingBalanceCents: rs(3440),
+    invoices: [inv("v-live", "INV-LIVE", "sent", "2026-11-24", rs(820000))],
+  });
+  ins = detectInsights(live);
+  const liveShortage = ofType(ins, "cash_shortage");
+  check("live scenario: cash_shortage fires", !!liveShortage, true);
+  check("live scenario: title never says fall", liveShortage?.title.includes("fall"), false);
+  check("live scenario: description never says fall", liveShortage?.description.includes("fall"), false);
+  check("live scenario: title says stays at", liveShortage?.title, "Cash stays at ₹3,440 until ₹8,20,000 is expected on 24 Nov 2026");
+  check("live scenario: low date is the IST today", liveShortage?.evidence.minDate, "2026-11-19");
+  check("live scenario: first inflow date recorded", liveShortage?.evidence.firstInflowDate, "2026-11-24");
+  check("live scenario: first inflow amount recorded", liveShortage?.evidence.firstInflowCents, rs(820000));
+  check("live scenario: expected in/out", `${liveShortage?.evidence.expectedInCents}/${liveShortage?.evidence.expectedOutCents}`, `${rs(820000)}/0`);
+  check("live scenario: severity warning", liveShortage?.severity, "warning");
+
+  // Same live scenario with no `today` passed: the engine's default
+  // must be the Asia/Kolkata date, not the UTC date. (Kolkata is a
+  // fixed +05:30 with no DST, so the expected date is computed here
+  // with plain UTC arithmetic, independent of the Intl path.)
+  const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const wantIst = istNow.toISOString().slice(0, 10);
+  check("todayStrIst returns the Asia/Kolkata date", todayStrIst(), wantIst);
+  check("formatDateShort", formatDateShort("2026-11-18"), "18 Nov 2026");
+  const liveNoToday = { ...live };
+  delete liveNoToday.today;
+  ins = detectInsights(liveNoToday);
+  check("live scenario without today: low date is the IST date", ofType(ins, "cash_shortage")?.evidence.minDate, wantIst);
+
+  // Cash below the floor with nothing scheduled at all: no inflow to
+  // wait for, so the honest line is that it just stays there.
+  ins = detectInsights(base({ openingBalanceCents: rs(3440) }));
+  const flat = ofType(ins, "cash_shortage");
+  check("flat cash: fires", !!flat, true);
+  check("flat cash: title says stays, never fall", flat?.title, "Cash stays at ₹3,440 with nothing scheduled in or out for 30 days");
+  check("flat cash: description says nothing scheduled", flat?.description.includes("nothing is scheduled in or out"), true);
 
   // ₹50,000 cash, same rent → min ₹30,000 → no fire.
   ins = detectInsights(base({
