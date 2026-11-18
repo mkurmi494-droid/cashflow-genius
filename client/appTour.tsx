@@ -58,7 +58,7 @@ const STEPS: AppTourStep[] = [
   {
     icon: "＋",
     title: "Quick Add — type it, say it, or paste it",
-    body: "The big + button (bottom centre on phones, top bar on desktop) is the fastest way in. Three ways: type it · tap 🎤 Voice and say “500 rupees kharcha chai” · or 📩 paste a bank/UPI SMS and it fills the form for you. Voice and SMS only ever make a draft — nothing is saved until you review and confirm, and a pasted message is never treated as proof of payment.",
+    body: "The big + button (bottom centre on phones, gold Add button on Home on desktop) is the fastest way in. Three ways: type it · tap 🎤 Voice and say “500 rupees kharcha chai” · or 📩 paste a bank/UPI SMS and it fills the form for you. Voice and SMS only ever make a draft — nothing is saved until you review and confirm, and a pasted message is never treated as proof of payment.",
     route: "money-flow",
     action: "quickAdd",
     actionLabel: "Open Quick Add now",
