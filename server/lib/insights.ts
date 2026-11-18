@@ -84,8 +84,8 @@ export interface InsightInput {
    *  an EMI plan is a product SOLD on instalments, so a pending
    *  instalment is money to COLLECT, not money to pay. */
   emiInstalments: InsightEmiInstalment[];
-  /** yyyy-mm-dd; defaults to today (UTC). Tests pass this in so the
-   *  rules are deterministic. */
+  /** yyyy-mm-dd; defaults to today in Asia/Kolkata. Tests pass this
+   *  in so the rules are deterministic. */
   today?: string;
 }
 
@@ -126,7 +126,15 @@ export function confidenceLabel(confidence: number): "high" | "medium" | "low" {
   return "low";
 }
 
-// ---------- date helpers (yyyy-mm-dd strings, UTC) ----------
+// ---------- date helpers (yyyy-mm-dd strings) ----------
+// Every helper below works on yyyy-mm-dd CALENDAR strings — the
+// arithmetic is timezone-free (Date.UTC on the string itself), so
+// month windows and month boundaries cannot drift. The ONE place an
+// instant becomes a date is todayStrIst: "today" is the
+// Asia/Kolkata calendar date, because the app is India-first and the
+// display is IST. Vercel runs in UTC, so a UTC "today" is a day
+// behind IST for the first 5½ hours of every day — that shipped a
+// cash_shortage dated yesterday (2026-11-18 on 19 Nov 00:17 IST).
 
 export function monthKeyOf(date: string): string {
   return date.slice(0, 7);
@@ -154,9 +162,20 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((db - da) / 86_400_000);
 }
 
-function todayStrUtc(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+/** Today's calendar date in Asia/Kolkata (UTC+05:30, no DST), via
+ *  Intl so the server's own timezone never leaks in. formatToParts
+ *  is used instead of locale formatting so the yyyy-mm-dd shape does
+ *  not depend on any locale's ordering. */
+export function todayStrIst(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const at = (type: string): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${at("year")}-${at("month")}-${at("day")}`;
 }
 
 /** Next monthly occurrence on/after `from`, keeping the day-of-month
@@ -179,6 +198,16 @@ function median(values: number[]): number {
   return n % 2 === 1
     ? (sorted[mid] as number)
     : Math.round(((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2);
+}
+
+/** "2026-11-18" → "18 Nov 2026" (same shape as the client's
+ *  prettyDate, built from the date string so no timezone can shift
+ *  it). Used in cash_shortage copy so a date reads as a date, not a
+ *  database key. */
+export function formatDateShort(date: string): string {
+  const [y = 1970, m = 1, d = 1] = date.split("-").map(Number);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${d} ${months[(m - 1 + 12) % 12] ?? ""} ${y}`;
 }
 
 /** ₹1,25,400 — Indian grouping, whole rupees when exact, two
@@ -204,7 +233,7 @@ function pctChange(now: number, before: number): number {
  * workspace returns an empty list.
  */
 export function detectInsights(input: InsightInput): GeneratedInsight[] {
-  const today = input.today ?? todayStrUtc();
+  const today = input.today ?? todayStrIst();
   const curMonth = monthKeyOf(today);
   const dayCutoff = dayOfMonthOf(today);
   const posted = input.transactions.filter((t) => t.status === "posted");
@@ -527,12 +556,20 @@ export function detectInsights(input: InsightInput): GeneratedInsight[] {
     let balance = startCash;
     let minBalance = balance;
     let minDate: string | null = null;
+    // First day money is expected in, and how much lands that day —
+    // the honest "until when" for a cash level that never falls.
+    let firstInflowDate: string | null = null;
+    let firstInflowCents = 0;
     for (let i = 0; i <= CASH_SHORTAGE_HORIZON_DAYS; i++) {
       const date = addDaysStr(today, i);
       const e = events.get(date) ?? { in: 0, out: 0 };
       balance += e.in - e.out;
       expectedIn += e.in;
       expectedOut += e.out;
+      if (e.in > 0 && firstInflowDate === null) {
+        firstInflowDate = date;
+        firstInflowCents = e.in;
+      }
       if (balance < minBalance) {
         minBalance = balance;
         minDate = date;
@@ -540,30 +577,79 @@ export function detectInsights(input: InsightInput): GeneratedInsight[] {
     }
     if (minBalance < CASH_SHORTAGE_FLOOR_CENTS) {
       // If the balance never drops below its starting point, the low
-      // IS today's balance — the date is today, not the window end.
+      // IS today's balance — the date is today, not the window end —
+      // and "fall" is a lie: the cash does not fall at all. Say what
+      // actually happens instead: it stays at today's level until the
+      // first expected payment lands (or, with nothing scheduled at
+      // all, for the whole window). Shortage/warning language is
+      // reserved for a real decline below today's balance.
       const lowDate = minDate ?? today;
-      out.push({
-        type: "cash_shortage",
-        severity: minBalance < 0 ? "critical" : "warning",
-        title:
-          minBalance < 0
-            ? `Cash is estimated to go below zero — ${formatINR(minBalance)} on ${lowDate}`
-            : `Cash is estimated to fall to ${formatINR(minBalance)} on ${lowDate}`,
-        description:
-          `From ${formatINR(startCash)} today, scheduled bills, EMIs and expected payments over the next 30 days ` +
-          `(${formatINR(expectedIn)} expected in, ${formatINR(expectedOut)} scheduled out) leave an estimated low of ` +
-          `${formatINR(minBalance)} on ${lowDate}. This is an estimate from your scheduled items — never a guarantee.`,
-        evidence: {
-          startCashCents: startCash,
-          minBalanceCents: minBalance,
-          minDate: lowDate,
-          expectedInCents: expectedIn,
-          expectedOutCents: expectedOut,
-        },
-        recommendedAction: "Check the Payment Calendar for what is due, and chase any overdue invoice before that date.",
-        confidence: 80,
-        insightKey: "cash_shortage",
-      });
+      const declined = minBalance < startCash;
+      if (!declined && firstInflowDate !== null) {
+        out.push({
+          type: "cash_shortage",
+          severity: minBalance < 0 ? "critical" : "warning",
+          title: `Cash stays at ${formatINR(startCash)} until ${formatINR(firstInflowCents)} is expected on ${formatDateShort(firstInflowDate)}`,
+          description:
+            `From ${formatINR(startCash)} today, scheduled bills, EMIs and expected payments over the next 30 days ` +
+            `(${formatINR(expectedIn)} expected in, ${formatINR(expectedOut)} scheduled out) never take your cash below ${formatINR(startCash)} — ` +
+            `it stays at that level until the first expected payment lands. This is an estimate from your scheduled items — never a guarantee.`,
+          evidence: {
+            startCashCents: startCash,
+            minBalanceCents: minBalance,
+            minDate: lowDate,
+            expectedInCents: expectedIn,
+            expectedOutCents: expectedOut,
+            firstInflowDate,
+            firstInflowCents,
+          },
+          recommendedAction: "Check the Payment Calendar for what is due, and chase the expected payment so it lands on time.",
+          confidence: 80,
+          insightKey: "cash_shortage",
+        });
+      } else if (!declined) {
+        out.push({
+          type: "cash_shortage",
+          severity: minBalance < 0 ? "critical" : "warning",
+          title: `Cash stays at ${formatINR(startCash)} with nothing scheduled in or out for 30 days`,
+          description:
+            `From ${formatINR(startCash)} today, nothing is scheduled in or out over the next 30 days, so your cash stays at ${formatINR(startCash)} — ` +
+            `below the ₹5,000 level this check watches. This is an estimate from your scheduled items — never a guarantee.`,
+          evidence: {
+            startCashCents: startCash,
+            minBalanceCents: minBalance,
+            minDate: lowDate,
+            expectedInCents: expectedIn,
+            expectedOutCents: expectedOut,
+          },
+          recommendedAction: "Check the Payment Calendar — if income is expected but not scheduled, add it so the picture stays honest.",
+          confidence: 80,
+          insightKey: "cash_shortage",
+        });
+      } else {
+        out.push({
+          type: "cash_shortage",
+          severity: minBalance < 0 ? "critical" : "warning",
+          title:
+            minBalance < 0
+              ? `Cash is estimated to go below zero — −${formatINR(minBalance)} on ${formatDateShort(lowDate)}`
+              : `Cash is estimated to fall to ${formatINR(minBalance)} on ${formatDateShort(lowDate)}`,
+          description:
+            `From ${formatINR(startCash)} today, scheduled bills, EMIs and expected payments over the next 30 days ` +
+            `(${formatINR(expectedIn)} expected in, ${formatINR(expectedOut)} scheduled out) leave an estimated low of ` +
+            `${formatINR(minBalance)} on ${formatDateShort(lowDate)}. This is an estimate from your scheduled items — never a guarantee.`,
+          evidence: {
+            startCashCents: startCash,
+            minBalanceCents: minBalance,
+            minDate: lowDate,
+            expectedInCents: expectedIn,
+            expectedOutCents: expectedOut,
+          },
+          recommendedAction: "Check the Payment Calendar for what is due, and chase any overdue invoice before that date.",
+          confidence: 80,
+          insightKey: "cash_shortage",
+        });
+      }
     }
   }
 
