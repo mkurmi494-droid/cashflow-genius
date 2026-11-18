@@ -310,3 +310,97 @@ Two demo-blocking bugs found in the live 3-minute rehearsal:
 - End-to-end retry (CONNECTION LIMIT simulation): 3 server processes (one per Vercel invocation) against a non-superuser role capped at 2 connections — one getState hit 53300, retried 1s/3s/6s and returned 200 in ~10.2s once the other servers' idle connections drained at 5s; the other two returned in ~140ms. Server log shows all three "hit pool exhaustion, retry" lines. (Note: a DB-level CONNECTION LIMIT does not constrain the superuser `postgres` role, so the simulation used a throwaway role `cgtest`, removed afterwards.)
 - First-visit path (throwaway user, no state row / no workspace): getState 200 with empty business workspace, setMode personal creates the second workspace, 4/4.
 - `npx tsc --noEmit`: 0 errors. `npm run build`: passes. NOT pushed, NOT deployed.
+
+## 2026-11-18 — Proactive Financial Insights Engine ("Genius Insights", NOT pushed, NOT deployed, migration NOT applied live)
+
+Sarya's pick from ChatGPT's roadmap (Priority 1): the AI notices problems
+WITHOUT being asked. All detection is deterministic SQL + TypeScript rules
+— zero LLM calls, zero extra cost.
+
+### What was built (local only)
+- **Migration `drizzle/0004_financial_insights.sql`** (generated with
+  `drizzle-kit generate`, then renamed): `financial_insights` (id text PK,
+  owner_id/mode text, insight_type, severity info|warning|critical, title,
+  description, evidence_json jsonb, recommended_action, confidence int
+  0–100, status active|dismissed|expected|snoozed|resolved,
+  insight_key, generated_at, expires_at) + `financial_insight_runs`
+  (owner_id, mode PK, generated_at, insight_count — the last-run record
+  so lazy regeneration works even when no rule fires). Partial unique
+  index on (owner_id, mode, insight_key) WHERE status = 'active'.
+  drizzle-kit quirk found and fixed: it parameterizes an `eq()` predicate
+  in a partial index and emits a broken `WHERE ... = $1` — the schema
+  uses a raw `sql` literal instead (see the NOTE comment in schema.ts),
+  and a re-run of `drizzle-kit generate` now reports "No schema changes".
+- **Engine `server/lib/insights.ts`** (pure, zero imports — transpiled by
+  the harness like the voice parser): 8 rules, all month-to-date (this
+  month so far vs the same days of earlier months, so the 3rd of the
+  month cannot false-fire "income dropped" before the salary lands).
+  spending_spike (>30% above 3-mo MTD avg, >₹1,000, ≥2 prior months),
+  income_drop (>20% below, >₹1,000), unusual_transaction (>3x the
+  category MEDIAN, >₹2,000, ≥5 peers), recurring_payment (same payee ±5%
+  amount, 3+ consecutive months ending this month or last), invoice_risk
+  (sent invoices only; overdue → critical), cash_shortage (30-day
+  projection mirroring Future Lens assumptions; EMI instalments count as
+  collections, not payments; floor ₹5,000), profit_leak (>20% vs last
+  month, >₹1,000), savings_opportunity (>₹500 less than last month).
+  Every insight carries the exact figures in evidence_json; descriptions
+  say "estimate" where they project. An empty workspace yields zero
+  insights (a ₹0 balance with no history must not raise a false alarm).
+- **Actions (server/actions.ts)**: `getInsights` (lists active findings;
+  regenerates when the last run is older than 6h; returns [] honestly if
+  migration 0004 is not applied yet — 42P01 caught, logged server-side),
+  `generateInsights` (unconditional run; 60s debounce guard), `dismissInsight`,
+  `markInsightExpected`, `snoozeInsight` (7 days). All scoped by the
+  session user + active workspace — the id alone is never trusted.
+  Generation state machine: new → active; still firing → figures
+  refreshed, status kept (expected stays expected, snoozed stays snoozed
+  until its deadline passes); dismissed → never resurrected; condition
+  cleared → resolved (and a resolved row reactivates if the condition
+  genuinely returns).
+- **Wiring**: `getInsights` joins the serialised ledger-read queue
+  (client/api.ts) and the route's pool-retry set (its writes are
+  idempotent upserts); `generateInsights` is excluded from cg:mutated
+  (it never touches ledger data). App.tsx's cg:mutated listener now also
+  invalidates ["cg-insights"] and, after transaction/invoice/recurring/
+  EMI mutations, fires generateInsights in the background and refreshes
+  the panel when it lands.
+- **UI**: "✦ Genius Insights" section on the Command Center, directly
+  below the hero (before the KPIs; nothing else moved). Each card shows
+  severity badge, title, description, evidence line (e.g. "Food
+  ₹12,400 vs usual ₹9,400 · +32%"), suggested action, confidence label,
+  and Dismiss / Expected / Remind me later / Review (Money Flow).
+  Empty state: "No insights need attention right now". Per-workspace:
+  the query key carries the active mode.
+- **Not built (deliberately)**: no cron/scheduler (Vercel Hobby cron out
+  of scope); no AI CFO changes; no other module touched. Two engine
+  bugs found by the harnesses and fixed: income_drop divided by this
+  month's income (zero when unpaid → never fired) and generation
+  reactivated "expected" rows.
+
+### Verification (local PostgreSQL 16, production build, DB cg_insights)
+- `scripts/insights-test.mjs` (pure rules, 59 checks): every rule fires
+  and does not fire (spike ±32% / within 30% / 1 prior month / <₹1,000
+  excess; income drop / zero-income critical; unusual 7.2x median /
+  <₹2,000 floor / <5 peers; recurring 3 months / 2 months / stale run /
+  gap month; invoice risk overdue days + sent-only totals; cash shortage
+  fire / healthy / invoice-lands-first / EMI-as-inflow; leak + saving;
+  empty workspace → 0; keys unique; confidence labels; INR formatting).
+  **59/59.**
+- `scripts/insights-e2e-test.mjs` (real HTTP API, 38 checks): first load
+  lazily generates 6 findings with real evidence (spike pctAbove 32,
+  invoice_risk critical); 60s debounce skips an immediate re-run with no
+  duplicate keys; dismiss/snooze/expected remove findings and a second
+  dismiss is rejected; a 7h-old run regenerates on load while dismissed/
+  snoozed/expected survive; topping income back up resolves income_drop
+  in the DB; an expired snooze reactivates; Personal starts empty, gets
+  its own cash_shortage, and it never leaks into Business; unknown id
+  rejected; the partial unique index rejects a second active row per key
+  (23505). **38/38.**
+- Migrations 0000–0004 apply cleanly in order on a fresh database
+  (26 tables, partial unique index present). `npx tsc --noEmit`: 0
+  errors. `npm run build`: passes. NOT pushed, NOT deployed, migration
+  NOT applied to the live database — the parent pushes and applies after
+  review. Live checklist for the parent: apply 0004 in the Supabase SQL
+  Editor, deploy, open the dashboard on a workspace with history and
+  confirm findings appear, dismiss one and reload to confirm it stays
+  gone.
