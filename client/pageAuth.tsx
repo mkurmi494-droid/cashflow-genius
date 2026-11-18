@@ -48,25 +48,30 @@ const introPortraitWebm = "/assets/cashflow-intro-portrait.webm";
 //
 // Full-screen on every screen — the intro is orientation-aware.
 // The landscape master is 16:9 and its baked-in title spans the middle
-// ~56% of the frame, so on a portrait phone neither plain fit works:
-// object-cover crops the title to "HFLOW GE", and object-contain (the
-// previous fix) letterboxed the video into a band across the middle of
+// ~62% of the frame, so on a portrait phone neither plain fit works:
+// object-cover crops the title to "HFLOW GE", and object-contain (an
+// earlier fix) letterboxed the video into a band across the middle of
 // the screen with empty gradient above and below — the "half screen"
 // intro the user reported. Phones therefore get a dedicated portrait
-// cut of the same video — cashflow-intro-portrait.* (720x1280, 9:16,
-// exactly 5.000s, derived from the landscape master with ffmpeg): the
-// full sharp frame sits at the centre of a 9:16 canvas whose top and
-// bottom are filled with the master's own gradient, blurred and
-// feathered into the scene, so the complete sphere + full title +
-// tagline stay sharp and visible while the picture itself fills the
-// whole phone screen edge to edge. The component picks the portrait
-// sources whenever the viewport is portrait (aspect ratio <= 1:1) and
-// re-picks live if the device rotates mid-intro; the video always uses
-// object-cover, so no viewport ever shows letterbox bars again.
-// Wider/landscape viewports keep the original 16:9 master with
-// object-cover (vertical crop only, which never touches the
-// horizontally-centred title). The procedural fallback below is a
-// full-screen flex scene, so it fills portrait phones too.
+// master — cashflow-intro-portrait.* (1080x1920, 9:16, exactly 5.000s,
+// rendered natively for the tall canvas, NOT derived from the landscape
+// master: big sphere, full-width title, clean gradient top and bottom).
+// The previous portrait cut was the 16:9 frame shrunk into the middle
+// of a 9:16 canvas with a blurred copy of itself filling the top and
+// bottom — that left a ghost of the title floating blurred at the bottom
+// and made the whole phone intro look soft, and the small band was then
+// upscaled 1.5x on a 1080-wide phone. The native portrait has no
+// blurred fill, no ghost text, and renders at the phone's own width, so
+// it stays sharp. Both masters are rendered by scripts/render_intro.py
+// (PIL + ffmpeg) from the current brand — violet Sprout mark in the
+// sphere, same stage timings as the fallback below. The component picks
+// the portrait sources whenever the viewport is portrait (aspect ratio
+// <= 1:1) and re-picks live if the device rotates mid-intro; the video
+ // always uses object-cover, so no viewport ever shows letterbox bars.
+ // Wider/landscape viewports keep the 16:9 master with object-cover
+ // (vertical crop only, which never touches the horizontally-centred
+ // title). The procedural fallback below is a full-screen flex scene, so
+ // it fills portrait phones too.
 // Reduced-motion users skip the intro entirely in App.
 // ------------------------------------------------------------------
 
@@ -568,9 +573,9 @@ function AuthCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-6 sm:py-10">
       <ParticleField count={18} />
-      <div className="glass rise relative w-full max-w-md rounded-3xl p-7 sm:p-8">
+      <div className="glass rise relative w-full max-w-md rounded-3xl p-5 sm:p-8">
         <div className="text-center">
           <GlassOrb size={92} label={<LogoMark className="h-11 w-11 text-[#7c3aed]" />} />
           <h1 className="mt-4 text-xl font-extrabold tracking-tight">{title}</h1>
@@ -596,11 +601,11 @@ export function PublicHome({
   notify?: (m: string) => void;
 }) {
   return (
-    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
+    <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-6 sm:py-10">
       <ParticleField count={22} />
-      <div className="glass rise relative w-full max-w-lg rounded-3xl p-7 text-center sm:p-9">
+      <div className="glass rise relative w-full max-w-lg rounded-3xl p-5 text-center sm:p-9">
         <GlassOrb size={130} label={<LogoMark className="h-16 w-16 text-[#7c3aed]" />} sub="The Living Ledger" />
-        <p className="display-font mt-5 text-[32px] font-semibold leading-tight">
+        <p className="display-font mt-5 text-[28px] font-semibold leading-tight sm:text-[32px]">
           Cashflow <span className="text-[var(--accent)]">Genius</span>
         </p>
         <p className="mt-1 text-xs font-bold uppercase tracking-[0.3em] text-[var(--dim)]">
@@ -616,7 +621,10 @@ export function PublicHome({
           messages, and an AI CFO that answers from your real numbers.
           Everything is calculated from your own records, private to your account.
         </p>
-        <div className="mt-4 grid grid-cols-2 gap-2 text-left">
+        {/* Four workspaces: one column on narrow phones (a 2-up grid
+            squeezes each tile to ~145px and the copy wraps to mush),
+            two columns from 420px up. */}
+        <div className="mt-4 grid grid-cols-1 gap-2 text-left min-[420px]:grid-cols-2">
           <div className="rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3">
             <p className="text-sm font-extrabold">☰ Personal Money</p>
             <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
