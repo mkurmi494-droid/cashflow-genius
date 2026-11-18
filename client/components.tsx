@@ -46,6 +46,21 @@ export function ParticleField({ count = 26, dense = false }: { count?: number; d
   );
 }
 
+/** Brand mark: the Cashflow Genius sprout (ChatGPT-designed logo, 2026-11-18).
+    Currency-neutral by design — no rupee/dollar sign, so it works globally.
+    Uses currentColor so call sites pick the colour (white on gradient tiles,
+    violet inside the light glass orbs). */
+export function LogoMark({ className = "h-6 w-6" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M50 6 L70 28 C72 30 70 34 67 34 L58 34 L58 50 C58 55 54 58 50 58 C46 58 42 55 42 50 L42 34 L33 34 C30 34 28 30 30 28 Z" />
+      <path d="M48 64 L52 64 L51 94 L49 94 Z" />
+      <path d="M47 64 C31 64 19 74 15 90 C29 92 43 84 47 66 Z" />
+      <path d="M53 64 C69 64 81 74 85 90 C71 92 57 84 53 66 Z" />
+    </svg>
+  );
+}
+
 export function GlassOrb({
   size = 190,
   label,
@@ -53,7 +68,7 @@ export function GlassOrb({
   tone = "mint",
 }: {
   size?: number;
-  label?: string;
+  label?: ReactNode;
   sub?: string;
   tone?: "mint" | "ai";
 }) {
@@ -70,7 +85,7 @@ export function GlassOrb({
       className="relative mx-auto flex items-center justify-center"
       style={{ width: size, height: size, animation: "floaty 7s ease-in-out infinite" }}
       role="img"
-      aria-label={label ?? "Animated glass sphere"}
+      aria-label={typeof label === "string" ? label : "Cashflow Genius logo"}
     >
       <span
         aria-hidden
