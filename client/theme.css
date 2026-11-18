@@ -225,7 +225,15 @@ body {
 }
 @keyframes page-in {
   from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  /* NOTE: the "to" keyframe must NOT set a transform. .page-anim runs
+     this with fill-mode "both", so a persisted transform — even
+     translateY(0) — makes .page-anim the containing block for
+     position:fixed descendants, and the AI CFO composer (fixed bottom-16)
+     scrolled away with the page instead of staying pinned. The first
+     fix (2026-11-18) only fixed cg-fade-up on .page-anim > * and missed
+     this one — that is why the pin still failed. Keep the final
+     keyframe opacity-only so no transform survives the animation. */
+  to { opacity: 1; }
 }
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(18px) scale(0.98); }
