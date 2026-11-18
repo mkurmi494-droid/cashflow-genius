@@ -59,6 +59,10 @@ try {
   sql(`DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM invoices WHERE owner_id = '${USER_ID}')`);
   sql(`DELETE FROM recurring_cashflows WHERE owner_id = '${USER_ID}'`);
   sql(`DELETE FROM businesses WHERE owner_id = '${USER_ID}'`);
+  // The mode row survives the deletes above, so without this a
+  // re-run inherits the previous run's final mode (personal) and
+  // every mode-scoped check fails. Reset it with the rest.
+  sql(`DELETE FROM user_workspace_state WHERE owner_id = '${USER_ID}'`);
   sql(`DELETE FROM auth_users WHERE id = '${USER_ID}'`);
   sql(
     `INSERT INTO auth_users (id, identifier, channel, password_hash, password_salt, verified) ` +
