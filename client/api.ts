@@ -197,6 +197,17 @@ const LEDGER_READ_ACTIONS = new Set([
   // second pool slot during a dashboard load or mode switch.
   "getInsights",
 ]);
+// A queued read must never stall the chain forever: fetch() has no
+// timeout of its own, so one stalled read (cold start, hung
+// connection) used to wedge every later ledger read — the Genius
+// Insights panel kept its old card after Re-check and the Personal +
+// Business panel sat on its skeleton, both with no error, until a
+// full reload. 30s is far above a healthy read (the server's own
+// pool retries span ~10s worst case); on expiry the read fails fast,
+// the chain advances, and the query's own retry runs it again.
+const LEDGER_READ_TIMEOUT_MS = 30_000;
+const LEDGER_READ_TIMEOUT_MESSAGE =
+  "The connection seems stuck — nothing was lost. Check your internet connection, then try again.";
 let ledgerReadQueue: Promise<unknown> = Promise.resolve();
 
 function callActionQueued(
@@ -204,10 +215,13 @@ function callActionQueued(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   if (!LEDGER_READ_ACTIONS.has(name)) return callAction(name, args);
-  const p = ledgerReadQueue.then(
-    () => callAction(name, args),
-    () => callAction(name, args),
-  );
+  const run = () =>
+    withTimeout(
+      callAction(name, args),
+      LEDGER_READ_TIMEOUT_MS,
+      LEDGER_READ_TIMEOUT_MESSAGE,
+    );
+  const p = ledgerReadQueue.then(run, run);
   ledgerReadQueue = p.catch(() => {});
   return p;
 }

@@ -418,7 +418,18 @@ function GeniusInsightsPanel({ state, go, notify }: { state: PageProps["state"];
   });
   const refresh = useMutation({
     mutationFn: () => api.generateInsights({}),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      // The regeneration already computed the fresh findings — write
+      // them straight into the cache so the panel shows the new card
+      // in the same tick as the toast. The invalidated refetch below
+      // only reconciles afterwards: on its own it was the whole
+      // refresh, and when that refetch stalled behind a slow queued
+      // read the panel kept its old card until a full reload.
+      queryClient.setQueryData(["cg-insights", state.activeMode], {
+        insights: res.insights,
+        generatedAt: res.generatedAt,
+        generatedFresh: true,
+      });
       void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
       notify("Insights re-checked from your latest records.");
     },
