@@ -13,7 +13,7 @@ VerifyScreen,
 } from "./pageAuth";
 import type { Route } from "./types";
 import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, fmtMoney, isPersonalLike, modeOf, todayStr, type AppMode, type State } from "./lib";
-import { CategorySelect, GlassOrb, Modal, ModePicker, ParticleField } from "./components";
+import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { DashboardPage } from "./pageDashboard";
 import { AiCfoPage } from "./pageCfo";
 import { MoneyFlowPage } from "./pageMoney";
@@ -119,7 +119,7 @@ function Welcome({
       <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
         <ParticleField count={20} />
         <div className="glass rise relative w-full max-w-lg rounded-3xl p-7 text-center sm:p-9">
-          <GlassOrb size={130} label="₹" sub="The Living Ledger" />
+          <GlassOrb size={130} label={<LogoMark className="h-16 w-16 text-[#7c3aed]" />} sub="The Living Ledger" />
           <h1 className="display-font mt-5 text-[26px] font-semibold tracking-tight">Welcome to Cashflow Genius</h1>
           <p className="mt-2 text-sm leading-relaxed text-[var(--dim)]">
             A financial intelligence universe for your money: a command center, an
@@ -1421,8 +1421,8 @@ export function App() {
         aria-label="Main navigation"
       >
         <div className="flex items-center gap-2.5 px-4 pb-2 pt-6">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#d946ef,#fb7185)] text-lg font-extrabold text-[#fbf7ea] shadow-[0_8px_18px_rgba(124,58,237,0.3)]">
-            ₹
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#d946ef,#fb7185)] text-[#fbf7ea] shadow-[0_8px_18px_rgba(124,58,237,0.3)]">
+            <LogoMark className="h-6 w-6 text-white" />
           </span>
           {!collapsed ? (
             <span className="min-w-0">
@@ -1542,8 +1542,8 @@ export function App() {
         }`}
       >
         <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3 sm:gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[linear-gradient(120deg,#7c3aed,#d946ef,#fb7185)] font-extrabold text-[#fbf7ea] lg:hidden">
-            ₹
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[linear-gradient(120deg,#7c3aed,#d946ef,#fb7185)] text-[#fbf7ea] lg:hidden">
+            <LogoMark className="h-5 w-5 text-white" />
           </span>
           <div className="relative min-w-0 flex-1">
             <label className="sr-only" htmlFor="global-search">Global search</label>
