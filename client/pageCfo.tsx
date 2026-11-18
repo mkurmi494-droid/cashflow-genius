@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
 import { buildTurns, displayRawText } from "./cfoHistory";
@@ -114,6 +114,23 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
     onError: (e) =>
       notify(`AI CFO could not answer: ${e instanceof Error ? e.message : String(e)}`),
   });
+
+    // Auto-scroll on a new answer: when a turn is added in this session,
+  // bring the end of the chat into view above the pinned composer, so the
+  // latest answer is visible without scrolling manually. The sentinel is
+  // scrolled into view (not window.scrollTo) because scrollIntoView scrolls
+  // whichever ancestor actually scrolls the page — the window on a phone,
+  // or an inner container if one applies. Keyed on localTurns only, so
+  // switching conversations, or a refetch moving a turn from pendingLocal
+  // into storedTurns, never scrolls — only a real new answer does.
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const answeredCount = useRef(0);
+  useEffect(() => {
+    if (localTurns.length > answeredCount.current) {
+      endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+    answeredCount.current = localTurns.length;
+  }, [localTurns.length]);
 
   const submit = (q: string) => {
     const trimmed = q.trim();
@@ -464,6 +481,10 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
                 </p>
               </div>
             ) : null}
+            {/* End-of-chat marker for the auto-scroll above. scroll-mb-36
+                (144px) keeps the last answer clear of the pinned composer
+                (bottom-16 plus its own height) and the bottom nav. */}
+            <div ref={endRef} className="scroll-mb-36" aria-hidden />
           </div>
 
         </div>
