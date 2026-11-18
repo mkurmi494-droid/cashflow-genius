@@ -9,27 +9,16 @@ import { Badge, GlassOrb, SectionTitle } from "./components";
 type CfoAnswer = ApiResponse<typeof api, "askCfo">["answer"];
 type CfoLang = "en" | "hinglish";
 
+/* Only three suggestions, by Sarya's call (2026-11-18): a wall of 16 chips
+   was too much. Two Hinglish + one English, the most useful CFO questions. */
 const SUGGESTED_EN = [
-  "Why is my profit decreasing?",
-  "Which expenses increased?",
-  "Can I afford another employee?",
-  "What are my cashflow risks?",
-  "Which invoices are overdue?",
-  "How much cash could remain in 30 days?",
-  "What are my biggest money leaks?",
-  "Am I saving fast enough for my goals?",
-];
+    "Which invoices are overdue?",
+  ];
 
 const SUGGESTED_HI = [
-  "Mera profit kam kyun ho raha hai?",
-  "Kaun se kharche sabse zyada badhe hain?",
-  "Kya main ek aur employee rakh sakta hoon?",
-  "Mere paise ka sabse bada risk kya hai?",
-  "Kaun si invoices overdue hain aur kitne ki?",
-  "30 din baad mere paas kitna cash bachega?",
-  "Mera paisa kahan leak ho raha hai?",
-  "Kya meri savings sahi speed par hai?",
-];
+    "Mera profit kam kyun ho raha hai?",
+    "Mera paisa kahan leak ho raha hai?",
+  ];
 
 /** "What the AI used — sources" as a collapsed block: only the heading
  *  and a Read more button show by default, so a long sources list no
