@@ -1702,6 +1702,68 @@ async function runInsightGeneration(
   return { skipped: false, generated: candidates.length, active: actives.length };
 }
 
+// One insight row in API shape, shared by getInsights and
+// generateInsights so both responses carry exactly the same objects.
+const insightShape = z.object({
+  id: z.string(),
+  insightType: z.string(),
+  severity: z.enum(["info", "warning", "critical"]),
+  title: z.string(),
+  description: z.string(),
+  evidenceJson: z.record(z.string(), z.unknown()),
+  recommendedAction: z.string(),
+  confidence: z.number(),
+  confidenceLabel: z.enum(["high", "medium", "low"]),
+  status: z.string(),
+  insightKey: z.string(),
+  generatedAt: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+});
+
+// The active findings for a workspace, severity-first, plus the last
+// run's timestamp — the read half of getInsights, shared with
+// generateInsights so a Re-check can hand the panel its fresh card
+// without waiting on a refetch.
+async function listActiveInsights(db: Db, ownerId: string, mode: AppModeT) {
+  const rows = await db
+    .select()
+    .from(schema.financialInsights)
+    .where(
+      and(
+        eq(schema.financialInsights.ownerId, ownerId),
+        eq(schema.financialInsights.mode, mode),
+        eq(schema.financialInsights.status, "active"),
+      ),
+    );
+  const rank: Record<string, number> = {
+    critical: 0,
+    warning: 1,
+    info: 2,
+  };
+  rows.sort(
+    (a, b) =>
+      (rank[a.severity] ?? 2) - (rank[b.severity] ?? 2) ||
+      b.generatedAt.getTime() - a.generatedAt.getTime(),
+  );
+  const runRow = (
+    await db
+      .select()
+      .from(schema.financialInsightRuns)
+      .where(
+        and(
+          eq(schema.financialInsightRuns.ownerId, ownerId),
+          eq(schema.financialInsightRuns.mode, mode),
+        ),
+      )
+      .limit(1)
+  )[0];
+  return {
+    insights: rows.map(insightOut),
+    generatedAt: runRow?.generatedAt.toISOString() ?? null,
+  };
+}
+
 export const Actions = {
   getState: defineAction({
     description:
@@ -4496,24 +4558,7 @@ export const Actions = {
       "Lists the active Genius Insights for the signed-in workspace, regenerating them first when the last run is older than 6 hours.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
-      insights: z.array(
-        z.object({
-          id: z.string(),
-          insightType: z.string(),
-          severity: z.enum(["info", "warning", "critical"]),
-          title: z.string(),
-          description: z.string(),
-          evidenceJson: z.record(z.string(), z.unknown()),
-          recommendedAction: z.string(),
-          confidence: z.number(),
-          confidenceLabel: z.enum(["high", "medium", "low"]),
-          status: z.string(),
-          insightKey: z.string(),
-          generatedAt: z.string(),
-          createdAt: z.string(),
-          expiresAt: z.string().nullable(),
-        }),
-      ),
+      insights: z.array(insightShape),
       generatedAt: z.string().nullable(),
       generatedFresh: z.boolean(),
     }),
@@ -4540,41 +4585,10 @@ export const Actions = {
           const res = await runInsightGeneration(db, user.id, wsMode);
           generatedFresh = !res.skipped;
         }
-        const rows = await db
-          .select()
-          .from(schema.financialInsights)
-          .where(
-            and(
-              eq(schema.financialInsights.ownerId, user.id),
-              eq(schema.financialInsights.mode, wsMode),
-              eq(schema.financialInsights.status, "active"),
-            ),
-          );
-        const rank: Record<string, number> = {
-          critical: 0,
-          warning: 1,
-          info: 2,
-        };
-        rows.sort(
-          (a, b) =>
-            (rank[a.severity] ?? 2) - (rank[b.severity] ?? 2) ||
-            b.generatedAt.getTime() - a.generatedAt.getTime(),
-        );
-        const runRow = (
-          await db
-            .select()
-            .from(schema.financialInsightRuns)
-            .where(
-              and(
-                eq(schema.financialInsightRuns.ownerId, user.id),
-                eq(schema.financialInsightRuns.mode, wsMode),
-              ),
-            )
-            .limit(1)
-        )[0];
+        const { insights, generatedAt } = await listActiveInsights(db, user.id, wsMode);
         return {
-          insights: rows.map(insightOut),
-          generatedAt: runRow?.generatedAt.toISOString() ?? null,
+          insights,
+          generatedAt,
           generatedFresh,
         };
       } catch (e) {
@@ -4596,18 +4610,22 @@ export const Actions = {
 
   generateInsights: defineAction({
     description:
-      "Re-runs the deterministic insight rules for the signed-in workspace now (upserts findings, resolves stale ones).",
+      "Re-runs the deterministic insight rules for the signed-in workspace now (upserts findings, resolves stale ones). Returns the fresh findings with the run, so the panel can show them without waiting on a refetch.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       generated: z.number(),
       active: z.number(),
       skipped: z.boolean(),
+      insights: z.array(insightShape),
+      generatedAt: z.string().nullable(),
     }),
     async handler(ctx, args) {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
       const wsMode = await activeMode(db, user.id);
-      return runInsightGeneration(db, user.id, wsMode);
+      const res = await runInsightGeneration(db, user.id, wsMode);
+      const fresh = await listActiveInsights(db, user.id, wsMode);
+      return { ...res, ...fresh };
     },
   }),
 
