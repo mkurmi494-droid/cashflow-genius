@@ -12,7 +12,7 @@ SignupScreen,
 VerifyScreen,
 } from "./pageAuth";
 import type { Route } from "./types";
-import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, fmtMoney, isPersonalLike, modeOf, todayStr, type AppMode, type State } from "./lib";
+import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, currencyConfirmOptions, fmtMoney, isPersonalLike, modeOf, todayStr, workspaceHasMoney, type AppMode, type State } from "./lib";
 import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { DashboardPage } from "./pageDashboard";
 import { AiCfoPage } from "./pageCfo";
@@ -1072,6 +1072,27 @@ export function App() {
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
   });
 
+  // Currency change goes through here from every control (top-bar
+  // select, More sheet, Settings form): while a conversion is running
+  // the controls are disabled, and this handler also ignores a change
+  // fired while pending, so a second conversion can never be queued
+  // behind the first. A workspace with money asks first — converting
+  // re-prices every amount in it at the live rate; an empty workspace
+  // converts without asking.
+  const requestCurrencyChange = async (next: string) => {
+    const current = stateQ.data;
+    if (!current || currencyMut.isPending) return;
+    const from = current.business.currency;
+    if (next === from) return;
+    if (workspaceHasMoney(current)) {
+      const ok = await confirm(
+        currencyConfirmOptions(from, next, MODE_LABELS[modeOf(current)]),
+      );
+      if (!ok) return;
+    }
+    currencyMut.mutate(next);
+  };
+
   const modeMut = useMutation({
     mutationFn: (m: AppMode) => api.setMode({ mode: m }),
     onSuccess: (_res, m) => {
@@ -1464,6 +1485,7 @@ export function App() {
     openNoteId,
     onQuickAdd: () => setQuickAddOpen(true),
     onShowTour: () => setTourOpen(true),
+    currencyBusy: currencyMut.isPending,
   };
   const initials = (state.business.ownerName || state.business.name || "CG")
     .split(" ")
@@ -1695,18 +1717,24 @@ export function App() {
               </div>
             ) : null}
           </div>
-          <label className="hidden sm:block">
+          <label className="hidden items-center gap-1.5 sm:flex">
             <span className="sr-only">Currency</span>
             <select
               className="field w-[92px]"
               value={state.business.currency}
               aria-label="Currency selector"
-              onChange={(e) => currencyMut.mutate(e.target.value)}
+              disabled={currencyMut.isPending}
+              onChange={(e) => void requestCurrencyChange(e.target.value)}
             >
               {["INR", "USD", "EUR", "GBP", "AED"].map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
+            {currencyMut.isPending ? (
+              <span className="whitespace-nowrap text-xs font-bold text-[var(--accent)]" role="status">
+                Converting…
+              </span>
+            ) : null}
           </label>
           <button
             type="button"
@@ -1956,6 +1984,34 @@ export function App() {
                     notify(m);
                   }}
                 />
+              </div>
+              <div className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left">
+                <label className="block text-sm font-bold">
+                  <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">Currency</span>
+                  <select
+                    className="field w-full"
+                    value={state.business.currency}
+                    aria-label="Currency selector"
+                    disabled={currencyMut.isPending}
+                    onChange={(e) => {
+                      setMoreOpen(false);
+                      void requestCurrencyChange(e.target.value);
+                    }}
+                  >
+                    {["INR", "USD", "EUR", "GBP", "AED"].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  {currencyMut.isPending ? (
+                    <span className="mt-1 block text-xs font-bold text-[var(--accent)]" role="status">
+                      Converting…
+                    </span>
+                  ) : (
+                    <span className="mt-1 block text-[11px] font-semibold text-[var(--dim)]">
+                      Changes all amounts in {MODE_LABELS[appMode]}
+                    </span>
+                  )}
+                </label>
               </div>
             </div>
             {personal ? (
