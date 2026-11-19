@@ -10,15 +10,12 @@ type CfoAnswer = ApiResponse<typeof api, "askCfo">["answer"];
 type CfoLang = "en" | "hinglish";
 
 /* Only three suggestions, by Sarya's call (2026-11-18): a wall of 16 chips
-   was too much. Two Hinglish + one English, the most useful CFO questions. */
+   was too much. Three English suggestions, the most useful CFO questions. */
 const SUGGESTED_EN = [
-    "Which invoices are overdue?",
-  ];
-
-const SUGGESTED_HI = [
-    "Mera profit kam kyun ho raha hai?",
-    "Mera paisa kahan leak ho raha hai?",
-  ];
+  "Which invoices are overdue?",
+  "Why is my profit falling?",
+  "Where is my money leaking?",
+];
 
 /** "What the AI used — sources" as a collapsed block: only the heading
  *  and a Read more button show by default, so a long sources list no
@@ -52,9 +49,9 @@ function SourcesBlock({
       {open ? (
         <>
           <p className="mt-0.5 text-xs text-[var(--dim)]">
-            Ye exact figures aur dates hain jo is answer ko banane mein use hue — server par
-            tumhare active workspace ke records se calculate kiye gaye. AI ne koi number
-            invent nahi kiya; number galat lage to pehle yehi sources check karo.
+            These are the exact figures and dates used to build this answer — calculated on
+            the server from your active workspace's records. The AI invented no numbers;
+            if a number looks wrong, check these sources first.
           </p>
           <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm text-[var(--dim)]">
             {sources.map((d, i) => (
@@ -115,7 +112,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
       notify(`AI CFO could not answer: ${e instanceof Error ? e.message : String(e)}`),
   });
 
-    // Auto-scroll on a new answer: when a turn is added in this session,
+  // Auto-scroll on a new answer: when a turn is added in this session,
   // bring the end of the chat into view above the pinned composer, so the
   // latest answer is visible without scrolling manually. The sentinel is
   // scrolled into view (not window.scrollTo) because scrollIntoView scrolls
@@ -267,7 +264,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
   };
 
   return (
-         <>
+    <>
     <div className="page-anim space-y-6 pb-8">
       <section className="card relative overflow-hidden p-5 sm:p-6">
         <div
@@ -426,7 +423,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
         <div className="space-y-5 lg:col-span-3">
           <section aria-label="Suggested questions">
             <div className="flex flex-wrap gap-2">
-              {[...SUGGESTED_HI, ...SUGGESTED_EN].map((q) => (
+              {SUGGESTED_EN.map((q) => (
                 <button
                   key={q}
                   type="button"
