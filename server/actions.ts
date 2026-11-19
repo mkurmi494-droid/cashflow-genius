@@ -27,6 +27,7 @@ import {
   type GeneratedInsight,
   type InsightInput,
 } from "./lib/insights";
+import { imageReasons, scoreReasons } from "./lib/scamShield";
 
 type Db = typeof db;
 
@@ -1327,9 +1328,15 @@ const scamCheckShape = z.object({
 
 // What the vision model may extract from an uploaded payment screenshot.
 // Every field is "what the image appears to show" — never proof of payment.
+// imageDescription is a one-phrase plain-English description of what the
+// image actually shows, so a photo of a car can be judged as a car.
 const imageOutShape = z.object({
   readable: z.boolean(),
   appearsToBePaymentScreenshot: z.boolean(),
+  // Defaulted, not required: if the model ever omits the description, the
+  // parse must still succeed (empty description) instead of failing the
+  // whole vision result into "unreadable".
+  imageDescription: z.string().default(""),
   visibleText: z.string(),
   senderOrReceiverName: z.string().nullable(),
   upiId: z.string().nullable(),
@@ -3932,6 +3939,7 @@ export const Actions = {
         .object({
           readable: z.boolean(),
           appearsToBePaymentScreenshot: z.boolean(),
+          imageDescription: z.string(),
           visibleText: z.string(),
           senderOrReceiverName: z.string().nullable(),
           upiId: z.string().nullable(),
@@ -4122,9 +4130,9 @@ export const Actions = {
         checks.push("Read the uploaded screenshot with the AI vision model and compared what it shows with what you were told.");
         try {
           imageFindings = await aiComplete(
-            `You are examining an image a user uploaded because someone claims it proves a UPI/payment transaction. Extract ONLY what is visibly readable in the image — never guess or invent. If a field is not visible, return null for it. Also describe any visible signs the image may have been edited or fabricated (mismatched fonts, misaligned text, blurred or pasted areas, inconsistent amounts or names). Your extraction will be used for a scam-risk check; you are NOT confirming the payment is real.`,
+            `You are examining an image a user uploaded to a scam-checking app. First describe in one short phrase what the image actually shows (for example 'a photo of a red car parked on a street' or 'a UPI payment success screen'). Then extract ONLY what is visibly readable in the image — never guess or invent. If a field is not visible, return null for it. Also describe any visible signs the image may have been edited or fabricated (mismatched fonts, misaligned text, blurred or pasted areas, inconsistent amounts or names). Your extraction will be used for a scam-risk check; you are NOT confirming the payment is real. If the image is not a payment screenshot at all, say so — a photo of a car, a person or anything else is not a scam by itself.`,
             {
-              images: [{ dataBase64: args.imageBase64!, mimeType: args.imageMimeType ?? "image/jpeg", caption: "Uploaded payment screenshot claim" }],
+              images: [{ dataBase64: args.imageBase64!, mimeType: args.imageMimeType ?? "image/jpeg", caption: "Uploaded image for scam check" }],
               schema: imageOutShape,
             },
             await getAiSettings(user.id),
@@ -4132,83 +4140,22 @@ export const Actions = {
         } catch {
           imageFindings = null;
         }
-        addReason({
-          code: "screenshot_not_proof",
-          title: "A screenshot alone never proves a payment",
-          detail: "Payment screenshots are trivial to fake with free editor apps — the tick, amount and name can all be fabricated. Even a genuine-looking screenshot is not evidence. The payment counts only when it appears in your own bank/UPI app with a matching UTR/reference number.",
-          severity: "high",
-        });
-        if (!imageFindings || !imageFindings.readable) {
-          addReason({
-            code: "image_unreadable",
-            title: "The screenshot could not be read clearly",
-            detail: "The analysis could not read this image reliably, so nothing in it could be checked. That is one more reason to verify directly in your bank/UPI app rather than trusting the image.",
-            severity: "medium",
-          });
-        } else {
-          if (!imageFindings.appearsToBePaymentScreenshot) {
-            addReason({
-              code: "image_not_payment",
-              title: "The image does not look like a payment receipt",
-              detail: "Whatever this image shows, it does not resemble a UPI/bank payment confirmation — so it cannot support a claim that money was paid.",
-              severity: "high",
-            });
-          }
-          if (imageFindings.editingSigns.trim() && !/^(none|no\b|not )/i.test(imageFindings.editingSigns.trim())) {
-            addReason({
-              code: "image_editing_signs",
-              title: "Signs the screenshot may have been edited",
-              detail: `The image check noted: ${imageFindings.editingSigns}`,
-              severity: "high",
-            });
-          }
-          const imgName = imageFindings.senderOrReceiverName;
-          if (imgName && args.claimedFrom && norm(imgName) !== norm(args.claimedFrom) && !norm(imgName).includes(norm(args.claimedFrom)) && !norm(args.claimedFrom).includes(norm(imgName))) {
-            addReason({
-              code: "image_name_mismatch",
-              title: "Name on the screenshot differs from the claimed sender",
-              detail: `The screenshot appears to show "${imgName}", but you were told the payment was from "${args.claimedFrom}". A mismatch like this is a strong fake-screenshot sign.`,
-              severity: "high",
-            });
-          }
-          if (imgName && !matchesKnown(imgName)) {
-            addReason({
-              code: "image_unknown_name",
-              title: "Name on the screenshot is not in your records",
-              detail: `"${imgName}" does not match any customer or counterparty in your Cashflow Genius records. Verify the payer inside your bank/UPI app instead of trusting the name printed on an image.`,
-              severity: "medium",
-            });
-          }
-          const imgUpi = imageFindings.upiId;
-          if (imgUpi && !matchesKnown(imgUpi.split("@")[0] ?? imgUpi)) {
-            addReason({
-              code: "image_unknown_upi",
-              title: "UPI ID on the screenshot is not in your records",
-              detail: `"${imgUpi}" does not match your saved customers or counterparties. UPI apps show the registered bank name for an ID before payment — check it there.`,
-              severity: "medium",
-            });
-          }
-          if (imageFindings.amountText && args.claimedAmountCents != null) {
-            const m = imageFindings.amountText.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/);
-            if (m) {
-              const imgCents = Math.round(parseFloat(m[1] ?? "0") * 100);
-              if (imgCents > 0 && imgCents !== args.claimedAmountCents) {
-                addReason({
-                  code: "image_amount_mismatch",
-                  title: "Amount on the screenshot differs from the expected amount",
-                  detail: `The screenshot appears to show ₹${(imgCents / 100).toLocaleString("en-IN")}, but you expected ₹${(args.claimedAmountCents / 100).toLocaleString("en-IN")}.`,
-                  severity: "high",
-                });
-              }
-            }
-          }
-        }
+        // Image scoring lives in server/lib/scamShield.ts: the AI judges
+        // what the image actually is, so a photo of a car ends at
+        // no_strong_signs instead of high_risk, and an unreadable image
+        // caps at suspicious. Payment-looking screenshots keep the
+        // strict treatment below.
+        for (const r of imageReasons(imageFindings, {
+          claimedFrom: args.claimedFrom,
+          claimedAmountCents: args.claimedAmountCents,
+          matchesKnown,
+          norm,
+        })) addReason(r);
       }
 
-      const weights: Record<Reason["severity"], number> = { critical: 45, high: 30, medium: 15, info: 5 };
-      const riskScore = Math.min(100, reasons.reduce((s, r) => s + weights[r.severity], 0));
-      const verdict: "high_risk" | "suspicious" | "no_strong_signs" =
-        riskScore >= 45 ? "high_risk" : riskScore >= 15 ? "suspicious" : "no_strong_signs";
+      // Verdict/score math lives in server/lib/scamShield.ts so the
+      // harness can prove the image cases without calling the AI.
+      const { riskScore, verdict } = scoreReasons(reasons);
       const kind: "text" | "screenshot" | "both" = hasImage && text ? "both" : hasImage ? "screenshot" : "text";
       const excerpt = (text || (hasImage ? "Screenshot check" : "")).slice(0, 140);
       await db.insert(schema.scamChecks).values({
