@@ -400,7 +400,7 @@ export function PaymentCalendarPage({ state, go, notify, notifyDeleted, confirm 
       <div>
         <h1 className="display-font text-[27px] font-semibold tracking-tight">🗓️ What&rsquo;s due — payment calendar</h1>
         <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[var(--dim)]">
-          Kis date pe kya pay karna hai, aur kis date pe kya collect karna hai — all in one place.
+          What to pay on which date, and what to collect on which date — all in one place.
           Built only from your own records: recurring bills and income, unpaid invoices, pending
           transactions{personal ? "" : " and EMI instalments you need to collect"}.
         </p>
