@@ -168,11 +168,11 @@ export function parseSpokenEntry(raw: string, mode: AppMode): EntryDraft {
   const original = raw.trim();
   const text = ` ${original.toLowerCase()} `;
   const amount = extractAmountRupees(original);
-  if (amount == null) notes.push("Amount samajh nahi aaya — amount field mein khud bhar do.");
+  if (amount == null) notes.push("I couldn't make out the amount — please enter it in the amount field yourself.");
   let type = detectDirection(text);
   if (!type) {
     type = "expense";
-    notes.push("Direction (in/out) clear nahi tha — Money out maan liya hai, draft mein check karke badal sakte ho.");
+    notes.push("The direction (in/out) wasn't clear — I've assumed money out; check the draft and change it if needed.");
   }
   // Date words: kal in Hinglish can mean yesterday OR tomorrow; for a
   // spoken money entry the money has almost always already moved, so
@@ -181,9 +181,9 @@ export function parseSpokenEntry(raw: string, mode: AppMode): EntryDraft {
   if (/\bparso\b|\bday before yesterday\b/.test(text)) date = addDaysStr(date, -2);
   else if (/\byesterday\b|\bkal\b/.test(text)) {
     date = addDaysStr(date, -1);
-    notes.push("“Kal” ko yesterday (beeta hua kal) mana hai — agar kal aane wala tha, to date draft mein badal do.");
+    notes.push("“Kal” was taken to mean yesterday — if you meant tomorrow, change the date in the draft.");
   } else if (/\baaj\b|\btoday\b/.test(text)) {
-    notes.push("Date: aaj ki rakhi hai.");
+    notes.push("Date: set to today.");
   }
   const explicit = extractDate(original);
   if (explicit) date = explicit;
@@ -227,20 +227,20 @@ export function parseBankMessage(raw: string, mode: AppMode): EntryDraft {
   const text = ` ${original.toLowerCase()} `;
 
   const amount = extractAmountRupees(original);
-  if (amount == null) notes.push("Message mein amount nahi mila — draft mein khud bhar do.");
+  if (amount == null) notes.push("No amount was found in the message — please enter it in the draft yourself.");
 
   let type: "income" | "expense" | null = null;
   if (/credit|credited|received|deposited|refund/.test(text)) type = "income";
   if (/debit|debited|spent|paid|sent|withdrawn|purchase/.test(text)) type = type === "income" ? type : "expense";
   if (!type) {
     type = detectDirection(text) ?? "expense";
-    notes.push("Message se direction pakka nahi hua — draft mein check karke sahi kar do.");
+    notes.push("The direction couldn't be determined from the message — please check the draft and correct it.");
   }
 
   const upiRefMatch = original.match(/(?:upi ref(?:erence)?(?: no)?|utr|ref(?:erence)?(?: no)?|txn id)[\s.:#-]*([A-Za-z0-9]{8,22})/i);
   const bareRef = original.match(/\b(\d{12})\b/);
   const upiRef = (upiRefMatch?.[1] ?? bareRef?.[1] ?? null) || null;
-  if (upiRef) notes.push(`UPI reference mila: ${upiRef} — apne bank/UPI app mein is UTR ko verify zaroor karo.`);
+  if (upiRef) notes.push(`UPI reference found: ${upiRef} — please verify this UTR in your bank/UPI app.`);
 
   // Merchant / counterparty: "at Swiggy", "to Rahul", "from Acme",
   // "VPA name@upi", "Info: UPI/…"
@@ -253,7 +253,7 @@ export function parseBankMessage(raw: string, mode: AppMode): EntryDraft {
   if (!counterparty && vpa) counterparty = vpa[1] ?? "";
 
   const date = extractDate(original) ?? todayStr();
-  if (!extractDate(original)) notes.push("Message mein date nahi mili — aaj ki date rakhi hai, draft mein check kar lo.");
+  if (!extractDate(original)) notes.push("No date was found in the message — today's date is set; please check it in the draft.");
 
   const paymentMethod = /upi/i.test(original) ? "UPI" : /card/i.test(original) ? "Card" : /neft|imps|rtgs|bank transfer/i.test(original) ? "Bank transfer" : "UPI";
   const category = pickCategory(text, mode, type) ?? "General";
@@ -261,7 +261,7 @@ export function parseBankMessage(raw: string, mode: AppMode): EntryDraft {
     ? `${type === "income" ? "Received from" : "Paid to"} ${counterparty} (from pasted message)`
     : "From pasted bank/UPI message";
 
-  notes.push("Ye draft sirf pasted message se bana hai — message kabhi payment ka proof nahi hota. Save karne se pehle apne bank/UPI app mein transaction verify karo.");
+  notes.push("This draft was made only from the pasted message — a message is never proof of payment. Before saving, verify the transaction in your bank/UPI app.");
   return {
     type,
     amount: amount == null ? "" : String(amount),
