@@ -169,6 +169,31 @@ try {
   check("normalize: non-object stays null", normalizeImageFindings("nope"), null);
   check("normalize: complete object passes through", normalizeImageFindings(carPhoto), carPhoto);
 
+  // ---- description-wins: a description IS the reading ----
+  // Live 2026-11-19: the model returned readable:false for a clear
+  // cartoon car (no text in it) while describing it perfectly — and the
+  // check wrongly scored "unreadable" (15, Suspicious) instead of
+  // no_strong_signs (5). A real description overrides a false readable.
+  const describedButUnreadableFlag = {
+    readable: false,
+    appearsToBePaymentScreenshot: false,
+    imageDescription: "a cartoon image of a red car on a road",
+    visibleText: "",
+    senderOrReceiverName: null,
+    upiId: null,
+    amountText: null,
+    dateText: null,
+    statusWording: null,
+    editingSigns: "none",
+  };
+  check("description-wins: readable becomes true", normalizeImageFindings(describedButUnreadableFlag).readable, true);
+  check("description-wins: score 5 / no_strong_signs", scoreReasons(imageReasons(normalizeImageFindings(describedButUnreadableFlag), baseOpts)), { riskScore: 5, verdict: "no_strong_signs" });
+  const blurryDescribed = { ...describedButUnreadableFlag, imageDescription: "a blurry photo, cannot tell what it shows" };
+  check("blurry description: readable stays false", normalizeImageFindings(blurryDescribed).readable, false);
+  check("blurry description: score 15 / suspicious", scoreReasons(imageReasons(normalizeImageFindings(blurryDescribed), baseOpts)), { riskScore: 15, verdict: "suspicious" });
+  const noDescription = { ...describedButUnreadableFlag, imageDescription: "" };
+  check("no description: readable stays false", normalizeImageFindings(noDescription).readable, false);
+
   // ---- normalizeImageShape: the model's invented shapes (from live logs) ----
   // 23:41 IST 2026-11-19, gpt-4o-mini, twice, same car image — the parse
   // ladder threw this away, the fallback lacked imageDescription, and the
