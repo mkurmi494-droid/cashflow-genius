@@ -2128,7 +2128,49 @@ export const Actions = {
       const newOpeningBalanceCents = converting
         ? convertMinor(args.openingBalanceCents, rate)
         : args.openingBalanceCents;
+      // Decided inside the transaction, after the row lock below: a
+      // concurrent request may already have converted this workspace.
+      let effectiveConverting = converting;
+      let effectiveFrom = fromCurrency;
       const convertedCounts = await db.transaction(async (tx) => {
+        // Lock this workspace's row FIRST. A concurrent conversion for
+        // the same workspace waits here; when it proceeds it re-reads
+        // the currency AFTER the first conversion committed, so it can
+        // never convert the same amounts twice (the 2026-11-19 incident:
+        // two overlapping requests both read INR and both converted
+        // INR → EUR, shrinking every amount ~100x).
+        const [locked] = await tx
+          .select()
+          .from(schema.businesses)
+          .where(eq(schema.businesses.id, business.id))
+          .for("update");
+        const lockedCurrency = locked.currency;
+        if (lockedCurrency === args.currency) {
+          // Already in the target currency — another request converted
+          // first (or this is a plain same-currency save). Skip the
+          // conversion entirely; the log and the response below report
+          // a plain profile save, not a conversion.
+          effectiveConverting = false;
+          effectiveFrom = lockedCurrency;
+        } else if (lockedCurrency !== fromCurrency) {
+          // The currency moved under this request after the rate was
+          // fetched, so the fetched rate is for the wrong pair. Abort
+          // without writing anything rather than converting at a stale
+          // rate or relabelling amounts without converting them.
+          throw new Error(
+            `The workspace currency changed while this request was running (it is now ${lockedCurrency}). Nothing was changed — please try again.`,
+          );
+        }
+        // Opening balance: a conversion stores the converted value;
+        // a plain save stores the form value; a skipped conversion
+        // (another request already converted) must keep the stored
+        // value, because args.openingBalanceCents is still in the OLD
+        // currency and writing it would overwrite the converted one.
+        const openingToStore = effectiveConverting
+          ? newOpeningBalanceCents
+          : fromCurrency === args.currency
+            ? args.openingBalanceCents
+            : locked.openingBalanceCents;
         await tx
           .update(schema.businesses)
           .set({
@@ -2136,11 +2178,11 @@ export const Actions = {
             industry: args.industry,
             country: args.country,
             currency: args.currency,
-            openingBalanceCents: newOpeningBalanceCents,
+            openingBalanceCents: openingToStore,
             timezone: args.timezone,
             ownerName: args.ownerName,
             ownerEmail: args.ownerEmail,
-            ownerPhone: args.ownerPhone ?? business.ownerPhone,
+            ownerPhone: args.ownerPhone ?? locked.ownerPhone,
             gstRateBp: args.gstRateBp,
             gstInclusive: args.gstInclusive ? 1 : 0,
             eligibleExpensePct: args.eligibleExpensePct,
@@ -2158,7 +2200,7 @@ export const Actions = {
           savingsGoals: 0,
           savingsTransfers: 0,
         };
-        if (converting) {
+        if (effectiveConverting) {
           // One SQL fragment per column: ROUND(col * rate) as bigint.
           // The rate is bound as its shortest decimal string and cast
           // to numeric, so the multiply is exact decimal arithmetic.
@@ -2255,9 +2297,9 @@ export const Actions = {
         // instead of leaving a half-reported change.
         await log(
           tx as unknown as Db,
-          converting ? "Currency converted" : "Business profile updated",
-          converting
-            ? `${fromCurrency} → ${args.currency} at ${rate}`
+          effectiveConverting ? "Currency converted" : "Business profile updated",
+          effectiveConverting
+            ? `${effectiveFrom} → ${args.currency} at ${rate}`
             : args.name || "Workspace",
           user.id,
           target,
@@ -2266,11 +2308,11 @@ export const Actions = {
       });
       if (args.mode) await setActiveMode(db, user.id, target);
       /* no query invalidation on Vercel — the client refetches after mutations */
-      return converting && rateInfo
+      return effectiveConverting && rateInfo
         ? {
             ok: true as const,
             conversion: {
-              from: fromCurrency,
+              from: effectiveFrom,
               to: args.currency,
               rate: rateInfo.rate,
               asOf: rateInfo.asOf,
