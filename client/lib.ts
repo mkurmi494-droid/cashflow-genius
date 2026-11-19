@@ -21,6 +21,32 @@ export function totalSavedCents(state: State): number {
   return (state.savingsGoals ?? []).reduce((s, g) => s + g.savedCents, 0);
 }
 
+/** Whether the workspace holds any money records at all — used before
+ *  a currency conversion, which re-prices every amount in the workspace.
+ *  An empty workspace converts without asking. */
+export function workspaceHasMoney(state: State): boolean {
+  return (
+    (state.transactions?.length ?? 0) > 0 ||
+    (state.budgets?.length ?? 0) > 0 ||
+    (state.invoices?.length ?? 0) > 0 ||
+    (state.recurring?.length ?? 0) > 0 ||
+    (state.emiPlans?.length ?? 0) > 0 ||
+    (state.savingsGoals?.length ?? 0) > 0
+  );
+}
+
+/** Confirm-dialog wording for a currency conversion, shared by the
+ *  top-bar selector, the More sheet and the Settings profile form so
+ *  all three ask the same question. */
+export function currencyConfirmOptions(from: string, to: string, modeLabel: string) {
+  return {
+    title: `Change currency to ${to}?`,
+    body: `Every amount in ${modeLabel} will convert from ${from} to ${to} at the live exchange rate — transactions, invoices, budgets, recurring bills, EMI plans and savings goals.`,
+    detail: `The rate is fetched live when you confirm. Nothing is deleted, but all amounts will be re-priced in ${to}.`,
+    confirmLabel: `Convert to ${to}`,
+  };
+}
+
 export const SAVINGS_STATUS_LABELS: Record<string, string> = {
   completed: "Goal reached 🎉",
   overdue: "Past target date",
