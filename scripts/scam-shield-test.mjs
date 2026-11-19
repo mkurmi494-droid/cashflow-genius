@@ -77,7 +77,7 @@ try {
   }).outputText;
   const modPath = join(out, "scamShield.js");
   writeFileSync(modPath, js);
-  const { imageReasons, scoreReasons } = require(modPath);
+  const { imageReasons, normalizeImageFindings, normalizeImageShape, scoreReasons } = require(modPath);
 
   // ---- scoreReasons: thresholds and cap ----
   check("score: no reasons", scoreReasons([]), { riskScore: 0, verdict: "no_strong_signs" });
@@ -146,6 +146,71 @@ try {
   const failed = imageReasons(null, baseOpts);
   check("vision call failed: only image_unreadable", codes(failed), ["image_unreadable"]);
   check("vision call failed: score 15 / suspicious", scoreReasons(failed), { riskScore: 15, verdict: "suspicious" });
+
+  // ---- normalizeImageFindings: the response contract can never break ----
+  // Live failure 2026-11-19: the rule-based fallback object had no
+  // imageDescription, so response validation failed and the whole check
+  // errored out instead of returning a verdict.
+  const fallbackShaped = {
+    readable: false,
+    appearsToBePaymentScreenshot: false,
+    visibleText: "",
+    senderOrReceiverName: null,
+    upiId: null,
+    amountText: null,
+    dateText: null,
+    statusWording: null,
+    editingSigns: "The screenshot could not be read — no AI vision model is connected.",
+  };
+  check("normalize: fallback-shaped object gains imageDescription", normalizeImageFindings(fallbackShaped).imageDescription, "");
+  check("normalize: fallback-shaped object keeps readable false", normalizeImageFindings(fallbackShaped).readable, false);
+  check("normalize: fallback-shaped object scores suspicious", scoreReasons(imageReasons(normalizeImageFindings(fallbackShaped), baseOpts)), { riskScore: 15, verdict: "suspicious" });
+  check("normalize: null stays null", normalizeImageFindings(null), null);
+  check("normalize: non-object stays null", normalizeImageFindings("nope"), null);
+  check("normalize: complete object passes through", normalizeImageFindings(carPhoto), carPhoto);
+
+  // ---- normalizeImageShape: the model's invented shapes (from live logs) ----
+  // 23:41 IST 2026-11-19, gpt-4o-mini, twice, same car image — the parse
+  // ladder threw this away, the fallback lacked imageDescription, and the
+  // whole check 500'd. The mapping must turn it into a usable answer.
+  const loggedCarShape = {
+    description: "a cartoon image of a red car on a road",
+    extraction: { payment_amount: null, transaction_id: null, date: null, sender: null, receiver: null },
+    signs_of_editing: "none",
+  };
+  const mappedCar = normalizeImageShape(loggedCarShape);
+  check("logged car shape: description mapped", mappedCar.imageDescription, "a cartoon image of a red car on a road");
+  check("logged car shape: readable", mappedCar.readable, true);
+  check("logged car shape: not a payment screenshot", mappedCar.appearsToBePaymentScreenshot, false);
+  check("logged car shape: editing signs mapped", mappedCar.editingSigns, "none");
+  check("logged car shape: amount null", mappedCar.amountText, null);
+  const mappedCarReasons = imageReasons(normalizeImageFindings(mappedCar), baseOpts);
+  check("logged car shape: one info reason", codes(mappedCarReasons), ["image_not_payment"]);
+  check("logged car shape: score 5 / no_strong_signs", scoreReasons(mappedCarReasons), { riskScore: 5, verdict: "no_strong_signs" });
+
+  // Older deploy's shape (23:19 IST 2026-11-19): flat, all nulls.
+  const loggedFlatShape = { transaction_id: null, amount: null, date: null, time: null, merchant: null, status: null, signs_of_editing: null };
+  const mappedFlat = normalizeImageShape(loggedFlatShape);
+  check("logged flat shape: readable (structured extraction)", mappedFlat.readable, true);
+  check("logged flat shape: not a payment screenshot", mappedFlat.appearsToBePaymentScreenshot, false);
+  check("logged flat shape: score 5 / no_strong_signs", scoreReasons(imageReasons(normalizeImageFindings(mappedFlat), baseOpts)), { riskScore: 5, verdict: "no_strong_signs" });
+
+  // Same invented shape, but a real payment screenshot: must stay strict.
+  const loggedPaymentShape = {
+    description: "a UPI payment success screen",
+    extraction: { payment_amount: "₹5,000", transaction_id: "123456789", date: "19 Nov 2026", sender: "Rohan Mehta", receiver: "Acme Ltd" },
+    signs_of_editing: "none",
+  };
+  const mappedPayment = normalizeImageShape(loggedPaymentShape);
+  check("logged payment shape: is a payment screenshot", mappedPayment.appearsToBePaymentScreenshot, true);
+  check("logged payment shape: amount mapped", mappedPayment.amountText, "₹5,000");
+  check("logged payment shape: sender mapped", mappedPayment.senderOrReceiverName, "Rohan Mehta");
+  const mappedPaymentReasons = imageReasons(normalizeImageFindings(mappedPayment), { ...baseOpts, claimedFrom: "Rohan Mehta", claimedAmountCents: 500000 });
+  check("logged payment shape: screenshot_not_proof only", codes(mappedPaymentReasons), ["screenshot_not_proof"]);
+  check("logged payment shape: score 30 / suspicious", scoreReasons(mappedPaymentReasons), { riskScore: 30, verdict: "suspicious" });
+
+  check("normalizeImageShape: unrecognised object passes through", normalizeImageShape({ foo: 1 }), { foo: 1 });
+  check("normalizeImageShape: null passes through", normalizeImageShape(null), null);
 } finally {
   rmSync(out, { recursive: true, force: true });
 }
