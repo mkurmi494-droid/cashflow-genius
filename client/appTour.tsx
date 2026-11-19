@@ -58,7 +58,7 @@ const STEPS: AppTourStep[] = [
   {
     icon: "＋",
     title: "Quick Add — type it, say it, or paste it",
-    body: "The big + button (bottom centre on phones, gold Add button on Home on desktop) is the fastest way in. Three ways: type it · tap 🎤 Voice and say “500 rupees kharcha chai” · or 📩 paste a bank/UPI SMS and it fills the form for you. Voice and SMS only ever make a draft — nothing is saved until you review and confirm, and a pasted message is never treated as proof of payment.",
+    body: "The big + button (bottom centre on phones, gold Add button on Home on desktop) is the fastest way in. Three ways: type it · tap 🎤 Voice and say “paid 500 for chai” · or 📩 paste a bank/UPI SMS and it fills the form for you. Voice and SMS only ever make a draft — nothing is saved until you review and confirm, and a pasted message is never treated as proof of payment.",
     route: "money-flow",
     action: "quickAdd",
     actionLabel: "Open Quick Add now",
@@ -84,7 +84,7 @@ const STEPS: AppTourStep[] = [
   {
     icon: "✦",
     title: "AI CFO — ask anything",
-    body: "Ask about your money in English or Hinglish (“Mera cash kab khatm hoga?”). Every answer is grounded in your real figures and shows “What the AI used” — the exact amounts and dates it calculated from — so nothing is ever invented. Try the suggested questions to start.",
+    body: "Ask about your money in English or Hindi (“When will my cash run out?”). Every answer is grounded in your real figures and shows “What the AI used” — the exact amounts and dates it calculated from — so nothing is ever invented. Try the suggested questions to start.",
     route: "ai-cfo",
   },
   {
