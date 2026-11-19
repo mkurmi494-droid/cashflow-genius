@@ -35,6 +35,7 @@ import { z } from "zod";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { userWorkspaceState } from "../schema";
+import { normalizeImageShape } from "./scamShield";
 
 export type AiProvider = "gemini" | "openrouter" | "openai";
 
@@ -274,6 +275,10 @@ function ruleBasedFallback(
     return {
       readable: false,
       appearsToBePaymentScreenshot: false,
+      // Must include every field the action's response shape requires —
+      // a missing imageDescription used to fail response validation and
+      // the whole Scam Shield check errored out (2026-11-19 live).
+      imageDescription: "",
       visibleText: "",
       senderOrReceiverName: null,
       upiId: null,
@@ -647,6 +652,13 @@ function tryJsonAnswer(parsed: unknown, schema: z.ZodTypeAny): unknown | null {
     const normalized = normalizeAnswerShape(candidate);
     const rechecked = schema.safeParse(normalized);
     if (rechecked.success) return rechecked.data;
+    // Vision answers: the model sometimes invents its own image shape
+    // (description / extraction / signs_of_editing). Translate it onto
+    // the schema's keys before giving up — see normalizeImageShape.
+    if (shapeKeys(schema).includes("readable")) {
+      const imageChecked = schema.safeParse(normalizeImageShape(candidate));
+      if (imageChecked.success) return imageChecked.data;
+    }
   }
   return null;
 }
