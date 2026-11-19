@@ -243,10 +243,23 @@ function QuickNote({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latest = useRef({ title: "", content: "" });
   latest.current = { title, content };
+  // One save at a time. The note has no id until the first save
+  // returns, so a second overlapping save would create a second note
+  // instead of updating the first — typing while the server is slow
+  // (cold start, 1–3s) used to duplicate the note on every pause.
+  // While a save is in flight, remember that newer content arrived
+  // and run exactly one more save afterwards, updating the same note.
+  const persistingRef = useRef(false);
+  const pendingRef = useRef(false);
 
   const persist = async () => {
     const { title: t, content: c } = latest.current;
     if (!t.trim() && !c.trim()) return;
+    if (persistingRef.current) {
+      pendingRef.current = true;
+      return;
+    }
+    persistingRef.current = true;
     setStatus("saving");
     try {
       const res = await api.saveNote({
@@ -262,6 +275,12 @@ function QuickNote({
       setStatus("saved");
     } catch {
       setStatus("failed");
+    } finally {
+      persistingRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        void persistRef.current();
+      }
     }
   };
   const persistRef = useRef(persist);
