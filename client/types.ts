@@ -37,4 +37,8 @@ export interface PageProps {
   onQuickAdd?: () => void;
   /** Opens the onboarding app tour (also re-openable from Settings). */
   onShowTour?: () => void;
+  /** True while the top-bar currency conversion is running — the
+   *  Settings currency control disables itself meanwhile so a second
+   *  conversion can never be fired behind the first. */
+  currencyBusy?: boolean;
 }
