@@ -76,10 +76,24 @@ export function normalizeImageFindings(
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   const nullableStr = (v: unknown): string | null =>
     typeof v === "string" ? v : null;
+  const description = str(f.imageDescription);
+  // A description IS the reading: if the model described what the image
+  // shows, it read the image — even when it also set readable to false
+  // (seen live 2026-11-19: a clear cartoon car with no text in it came
+  // back readable:false with a perfect description, and was wrongly
+  // scored "unreadable"). Only a description that itself says the image
+  // cannot be made out keeps readable false.
+  const descriptionSaysUnreadable =
+    description.trim().length > 0 &&
+    /blurr|too dark|can ?n[o']t (tell|read|see)|unreadable|not (clear|legible|visible)/i.test(
+      description,
+    );
   return {
-    readable: f.readable === true,
+    readable:
+      f.readable === true ||
+      (description.trim().length > 0 && !descriptionSaysUnreadable),
     appearsToBePaymentScreenshot: f.appearsToBePaymentScreenshot === true,
-    imageDescription: str(f.imageDescription),
+    imageDescription: description,
     visibleText: str(f.visibleText),
     senderOrReceiverName: nullableStr(f.senderOrReceiverName),
     upiId: nullableStr(f.upiId),
