@@ -443,13 +443,13 @@ function QuickAdd({
       rec.onend = () => setListening(false);
       rec.onerror = () => {
         setListening(false);
-        setVoiceError("Voice sun nahi paya — dobara try karo, ya neeche phrase type karke draft banao.");
+        setVoiceError("Couldn't hear the voice — please try again, or type the phrase below to make a draft.");
       };
       rec.start();
       setListening(true);
     } catch {
       setListening(false);
-      setVoiceError("Is browser mein voice start nahi hua — neeche phrase type karke draft banao.");
+      setVoiceError("Voice couldn't start in this browser — type the phrase below to make a draft instead.");
     }
   };
 
@@ -518,11 +518,11 @@ function QuickAdd({
 
       {entryTab === "voice" ? (
         <div className="mb-4 space-y-3 rounded-2xl bg-[var(--surface-soft)] p-4">
-          <p className="text-sm font-bold">Bolo, draft ban jayega 🎤</p>
+          <p className="text-sm font-bold">Say it — a draft will be made 🎤</p>
           <p className="text-xs leading-relaxed text-[var(--dim)]">
-            Jaise: <em>“500 rupees kharcha chai”</em> ya <em>“received 5000 from client”</em> ya{" "}
-            <em>“kal 18000 rent diya”</em>. Amount, in/out, category aur date hum nikaal lenge —
-            phir draft ko check/edit karke hi save hoga. Kuch auto-save nahi hota.
+            For example: <em>“paid 500 for chai”</em> or <em>“received 5000 from client”</em> or{" "}
+            <em>“paid 18000 rent yesterday”</em>. We pull out the amount, in/out, category and date —
+            then the draft is saved only after you check and edit it. Nothing is auto-saved.
           </p>
           {speechSupported ? (
             <button
@@ -534,12 +534,12 @@ function QuickAdd({
               disabled={listening}
               aria-label={listening ? "Listening, speak now" : "Start voice entry"}
             >
-              {listening ? "🔴 Sun raha hoon… bolo" : "🎤 Tap & speak"}
+              {listening ? "🔴 Listening… speak now" : "🎤 Tap & speak"}
             </button>
           ) : (
             <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
-              Is browser mein voice recognition available nahi hai (Chrome/Android mein aata hai).
-              Koi baat nahi — neeche wahi phrase type kar do, draft waise hi ban jayega. Yehi voice entry ka typing fallback hai.
+              Voice recognition isn't available in this browser (it works in Chrome/Android).
+              No problem — just type the same phrase below and the draft will be made the same way. This is the typing fallback for voice entry.
             </p>
           )}
           {voiceError ? (
@@ -547,14 +547,14 @@ function QuickAdd({
           ) : null}
           <label className="block">
             <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">
-              {speechSupported ? "Ya phrase yahan type karo" : "Phrase yahan type karo"}
+              {speechSupported ? "Or type the phrase here" : "Type the phrase here"}
             </span>
             <input
               className="field"
               value={voiceText}
               onChange={(e) => setVoiceText(e.target.value)}
               aria-label="Type the phrase you would say"
-              placeholder="e.g. 500 rupees kharcha chai"
+              placeholder="e.g. paid 500 for chai"
               maxLength={300}
             />
           </label>
@@ -567,18 +567,18 @@ function QuickAdd({
             Make draft from this phrase →
           </button>
           <p className="text-[11px] leading-relaxed text-[var(--dim)]">
-            Draft sirf is workspace ({mode === "personal" ? "Personal Money" : mode === "creator" ? "Creator & Freelancer" : mode === "student" ? "Student / First Salary" : "Business Money"}) mein banta hai — doosre workspace mein kuch nahi jata.
+            The draft is made only in this workspace ({mode === "personal" ? "Personal Money" : mode === "creator" ? "Creator & Freelancer" : mode === "student" ? "Student / First Salary" : "Business Money"}) — nothing goes to another workspace.
           </p>
         </div>
       ) : null}
 
       {entryTab === "sms" ? (
         <div className="mb-4 space-y-3 rounded-2xl bg-[var(--surface-soft)] p-4">
-          <p className="text-sm font-bold">Bank / UPI message paste karo 📩</p>
+          <p className="text-sm font-bold">Paste a bank / UPI message 📩</p>
           <p className="text-xs leading-relaxed text-[var(--dim)]">
-            Bank SMS ya UPI message yahan paste karo — amount, merchant, in/out, date aur UPI
-            reference nikaal ke draft ban jayega. <strong className="text-[var(--text)]">Kuch bhi auto-save nahi hoga</strong> —
-            pehle draft check/edit karo, phir save.
+            Paste a bank SMS or UPI message here — the amount, merchant, in/out, date and UPI
+            reference will be pulled out to make a draft. <strong className="text-[var(--text)]">Nothing is auto-saved</strong> —
+            check and edit the draft first, then save.
           </p>
           <label className="block">
             <span className="sr-only">Paste the bank or UPI message</span>
@@ -600,9 +600,9 @@ function QuickAdd({
             Make draft from this message →
           </button>
           <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]">
-            ⚠️ Pasted message kabhi payment ka proof nahi hota. Save karne se pehle apne bank/UPI
-            app mein transaction aur UTR khud verify karo — Scam Shield (menu mein) suspicious
-            messages ko check bhi karta hai.
+            ⚠️ A pasted message is never proof of payment. Before saving, verify the transaction
+            and UTR in your bank/UPI app yourself — Scam Shield (in the menu) also checks
+            suspicious messages.
           </p>
         </div>
       ) : null}
@@ -619,7 +619,7 @@ function QuickAdd({
           <div className="rounded-2xl border border-[var(--accent)]/30 bg-[var(--ai)] px-3.5 py-3" role="status">
             <p className="text-sm font-extrabold text-[var(--ai-text)]">{draftSource} — check &amp; edit, then record</p>
             <p className="mt-0.5 text-xs leading-relaxed text-[var(--ai-text)]">
-              Neeche ke fields draft se bhare hain. Galat lage to yahin badal do — save tabhi hoga jab tum Record dabaaoge.
+              The fields below are filled from the draft. If anything looks wrong, change it here — nothing is saved until you press Record.
             </p>
             {draftNotes.length > 0 ? (
               <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs leading-relaxed text-[var(--ai-text)]">
