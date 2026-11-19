@@ -266,6 +266,38 @@ try {
     Math.round(after.txns[0] * res.conversion.rate),
   );
 
+  // ---- concurrent same-direction conversions: exactly one conversion ----
+  // The 2026-11-19 incident: two overlapping updateBusiness calls both
+  // read the stale currency and both converted, shrinking every amount
+  // ~100x. Both requests fire at once from the same EUR base; the
+  // server serialises on the workspace row (SELECT … FOR UPDATE), so
+  // the second must see USD already and skip — one conversion total,
+  // amounts converted exactly once, one log entry.
+  const bizEur = (await call("getState")).business;
+  const eurTxns = sqlVals(`SELECT amount_cents FROM transactions WHERE owner_id = '${USER_ID}' AND mode = 'business' ORDER BY date`).map(Number);
+  const eurOpening = Number(sqlOne(`SELECT opening_balance_cents FROM businesses WHERE owner_id = '${USER_ID}' AND mode = 'business'`));
+  const [concA, concB] = await Promise.all([
+    call("updateBusiness", { ...bizEur, currency: "USD" }),
+    call("updateBusiness", { ...bizEur, currency: "USD" }),
+  ]);
+  const concConvs = [concA, concB].filter((r) => r.conversion);
+  check("concurrent: exactly one conversion reported", concConvs.length, 1);
+  const concRate = concConvs[0]?.conversion?.rate;
+  check("concurrent: the one conversion has a live rate", typeof concRate === "number" && Number.isFinite(concRate) && concRate > 0, true);
+  check("concurrent: currency label now USD", sqlOne(`SELECT currency FROM businesses WHERE owner_id = '${USER_ID}' AND mode = 'business'`), "USD");
+  const concTxns = sqlVals(`SELECT amount_cents FROM transactions WHERE owner_id = '${USER_ID}' AND mode = 'business' ORDER BY date`).map(Number);
+  eurTxns.forEach((v, i) => checkClose(`concurrent: transaction ${i + 1} converted exactly once`, concTxns[i], Math.round(v * concRate)));
+  checkClose(
+    "concurrent: opening converted exactly once",
+    Number(sqlOne(`SELECT opening_balance_cents FROM businesses WHERE owner_id = '${USER_ID}' AND mode = 'business'`)),
+    Math.round(eurOpening * concRate),
+  );
+  check(
+    "concurrent: exactly one Currency converted log entry",
+    Number(sqlOne(`SELECT count(*) FROM activity_logs WHERE owner_id = '${USER_ID}' AND mode = 'business' AND action = 'Currency converted' AND detail LIKE 'EUR → USD%'`)),
+    1,
+  );
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 } catch (e) {
