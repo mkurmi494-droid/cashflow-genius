@@ -10,9 +10,10 @@
 // otherwise.
 
 import { defineAction, z, type ActionsModule } from "./lib/actions";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql, type SQLWrapper } from "drizzle-orm";
 import * as schema from "./schema";
 import { db, checkDatabase, dbErrorCode } from "./lib/db";
+import { convertMinor, fetchRate } from "./lib/rates";
 import { aiComplete, getAiSettings, aiExtrasFromRow, DEFAULT_OPENAI_MODEL } from "./lib/ai";
 import {
   loadBriefingBatch,
@@ -1368,6 +1369,31 @@ const savingsGoalShape = z.object({
 
 const okShape = z.object({ ok: z.literal(true) });
 
+// updateBusiness also reports a currency conversion, when one happened:
+// the live rate used and how many rows were converted in each table.
+// Optional, so callers that ignore it keep working unchanged.
+const updateBusinessResponseShape = z.object({
+  ok: z.literal(true),
+  conversion: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      rate: z.number(),
+      asOf: z.string(),
+      convertedCounts: z.object({
+        transactions: z.number().int(),
+        invoiceItems: z.number().int(),
+        recurring: z.number().int(),
+        budgets: z.number().int(),
+        emiPlans: z.number().int(),
+        emiInstalments: z.number().int(),
+        savingsGoals: z.number().int(),
+        savingsTransfers: z.number().int(),
+      }),
+    })
+    .optional(),
+});
+
 // Delete responses that carry an undo snapshot id: the client shows an
 // Undo button after the delete, which calls restoreDeletedItem with
 // this trashId to bring the exact record (and its linked rows) back.
@@ -2065,7 +2091,7 @@ export const Actions = {
 
   updateBusiness: defineAction({
     description:
-      "Saves the active workspace's profile and preferences (name, industry, country, currency, opening balance, timezone, owner, GST settings). When a mode is given, that mode's workspace is the one saved and made active.",
+      "Saves the active workspace's profile and preferences (name, industry, country, currency, opening balance, timezone, owner, GST settings). When a mode is given, that mode's workspace is the one saved and made active. When the currency changes, every amount in that workspace is first converted to the new currency at the live exchange rate — if the rate cannot be fetched, nothing is changed at all.",
     request: z.object({
       token: z.string().max(200).optional(),
       mode: z.enum(["business", "personal", "creator", "student"]).optional(),
@@ -2083,35 +2109,175 @@ export const Actions = {
       eligibleExpensePct: z.number().int().min(0).max(100),
       onboarded: z.boolean(),
     }),
-    response: okShape,
-    async handler(ctx, args): Promise<z.infer<typeof okShape>> {
+    response: updateBusinessResponseShape,
+    async handler(ctx, args): Promise<z.infer<typeof updateBusinessResponseShape>> {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
       const target = args.mode ?? (await activeMode(db, user.id));
       const business = await ensureBusiness(db, user.id, target);
-      await db
-        .update(schema.businesses)
-        .set({
-          name: args.name,
-          industry: args.industry,
-          country: args.country,
-          currency: args.currency,
-          openingBalanceCents: args.openingBalanceCents,
-          timezone: args.timezone,
-          ownerName: args.ownerName,
-          ownerEmail: args.ownerEmail,
-          ownerPhone: args.ownerPhone ?? business.ownerPhone,
-          gstRateBp: args.gstRateBp,
-          gstInclusive: args.gstInclusive ? 1 : 0,
-          eligibleExpensePct: args.eligibleExpensePct,
-          onboarded: args.onboarded ? 1 : 0,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.businesses.id, business.id));
+      const fromCurrency = business.currency;
+      const converting = args.currency !== fromCurrency;
+      // The live rate is fetched FIRST: if it fails, this throws before
+      // any write, so the currency label can never change without the
+      // amounts converting with it. No fallback rate is ever used.
+      const rateInfo = converting ? await fetchRate(fromCurrency, args.currency) : null;
+      const rate = rateInfo?.rate ?? 1;
+      // args.openingBalanceCents arrives in the OLD currency (both
+      // callers send the stored / form value shown in old units), so it
+      // is converted here like every other amount.
+      const newOpeningBalanceCents = converting
+        ? convertMinor(args.openingBalanceCents, rate)
+        : args.openingBalanceCents;
+      const convertedCounts = await db.transaction(async (tx) => {
+        await tx
+          .update(schema.businesses)
+          .set({
+            name: args.name,
+            industry: args.industry,
+            country: args.country,
+            currency: args.currency,
+            openingBalanceCents: newOpeningBalanceCents,
+            timezone: args.timezone,
+            ownerName: args.ownerName,
+            ownerEmail: args.ownerEmail,
+            ownerPhone: args.ownerPhone ?? business.ownerPhone,
+            gstRateBp: args.gstRateBp,
+            gstInclusive: args.gstInclusive ? 1 : 0,
+            eligibleExpensePct: args.eligibleExpensePct,
+            onboarded: args.onboarded ? 1 : 0,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.businesses.id, business.id));
+        const counts = {
+          transactions: 0,
+          invoiceItems: 0,
+          recurring: 0,
+          budgets: 0,
+          emiPlans: 0,
+          emiInstalments: 0,
+          savingsGoals: 0,
+          savingsTransfers: 0,
+        };
+        if (converting) {
+          // One SQL fragment per column: ROUND(col * rate) as bigint.
+          // The rate is bound as its shortest decimal string and cast
+          // to numeric, so the multiply is exact decimal arithmetic.
+          // Postgres ROUND rounds halves away from zero while JS
+          // Math.round rounds halves toward +∞, so a value landing
+          // exactly on .5 can differ by 1 minor unit between the two
+          // — the harness tolerates ±1.
+          const conv = (col: SQLWrapper) =>
+            sql`round(${col} * ${String(rate)}::numeric)::bigint`;
+          const owned = (ownerId: SQLWrapper, mode: SQLWrapper) =>
+            and(eq(ownerId, user.id), eq(mode, target));
+          counts.transactions = (
+            await tx
+              .update(schema.transactions)
+              .set({ amountCents: conv(schema.transactions.amountCents) })
+              .where(owned(schema.transactions.ownerId, schema.transactions.mode))
+              .returning({ id: schema.transactions.id })
+          ).length;
+          const invoiceIds = tx
+            .select({ id: schema.invoices.id })
+            .from(schema.invoices)
+            .where(owned(schema.invoices.ownerId, schema.invoices.mode));
+          counts.invoiceItems = (
+            await tx
+              .update(schema.invoiceItems)
+              .set({ unitPriceCents: conv(schema.invoiceItems.unitPriceCents) })
+              .where(inArray(schema.invoiceItems.invoiceId, invoiceIds))
+              .returning({ id: schema.invoiceItems.id })
+          ).length;
+          counts.recurring = (
+            await tx
+              .update(schema.recurringCashflows)
+              .set({ amountCents: conv(schema.recurringCashflows.amountCents) })
+              .where(owned(schema.recurringCashflows.ownerId, schema.recurringCashflows.mode))
+              .returning({ id: schema.recurringCashflows.id })
+          ).length;
+          counts.budgets = (
+            await tx
+              .update(schema.budgets)
+              .set({ monthlyLimitCents: conv(schema.budgets.monthlyLimitCents) })
+              .where(owned(schema.budgets.ownerId, schema.budgets.mode))
+              .returning({ id: schema.budgets.id })
+          ).length;
+          counts.emiPlans = (
+            await tx
+              .update(schema.emiPlans)
+              .set({
+                totalCents: conv(schema.emiPlans.totalCents),
+                downPaymentCents: conv(schema.emiPlans.downPaymentCents),
+              })
+              .where(owned(schema.emiPlans.ownerId, schema.emiPlans.mode))
+              .returning({ id: schema.emiPlans.id })
+          ).length;
+          const planIds = tx
+            .select({ id: schema.emiPlans.id })
+            .from(schema.emiPlans)
+            .where(owned(schema.emiPlans.ownerId, schema.emiPlans.mode));
+          counts.emiInstalments = (
+            await tx
+              .update(schema.emiInstalments)
+              .set({ amountCents: conv(schema.emiInstalments.amountCents) })
+              .where(inArray(schema.emiInstalments.planId, planIds))
+              .returning({ id: schema.emiInstalments.id })
+          ).length;
+          counts.savingsGoals = (
+            await tx
+              .update(schema.savingsGoals)
+              .set({ targetCents: conv(schema.savingsGoals.targetCents) })
+              .where(owned(schema.savingsGoals.ownerId, schema.savingsGoals.mode))
+              .returning({ id: schema.savingsGoals.id })
+          ).length;
+          counts.savingsTransfers = (
+            await tx
+              .update(schema.savingsTransfers)
+              .set({ amountCents: conv(schema.savingsTransfers.amountCents) })
+              .where(owned(schema.savingsTransfers.ownerId, schema.savingsTransfers.mode))
+              .returning({ id: schema.savingsTransfers.id })
+          ).length;
+          // Genius Insights are priced in the old currency — drop the
+          // last-run marker so getInsights regenerates them in the new
+          // currency on the next load. The insight rows themselves stay.
+          await tx
+            .delete(schema.financialInsightRuns)
+            .where(
+              and(
+                eq(schema.financialInsightRuns.ownerId, user.id),
+                eq(schema.financialInsightRuns.mode, target),
+              ),
+            );
+        }
+        // tx is the transaction client; log() only needs insert/select,
+        // so the cast is safe — and keeping the log inside the
+        // transaction means a logging failure rolls the conversion back
+        // instead of leaving a half-reported change.
+        await log(
+          tx as unknown as Db,
+          converting ? "Currency converted" : "Business profile updated",
+          converting
+            ? `${fromCurrency} → ${args.currency} at ${rate}`
+            : args.name || "Workspace",
+          user.id,
+          target,
+        );
+        return counts;
+      });
       if (args.mode) await setActiveMode(db, user.id, target);
-      await log(db, "Business profile updated", args.name || "Workspace", user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
-      return { ok: true as const };
+      return converting && rateInfo
+        ? {
+            ok: true as const,
+            conversion: {
+              from: fromCurrency,
+              to: args.currency,
+              rate: rateInfo.rate,
+              asOf: rateInfo.asOf,
+              convertedCounts,
+            },
+          }
+        : { ok: true as const };
     },
   }),
 
