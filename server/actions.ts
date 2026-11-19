@@ -27,7 +27,7 @@ import {
   type GeneratedInsight,
   type InsightInput,
 } from "./lib/insights";
-import { imageReasons, scoreReasons } from "./lib/scamShield";
+import { imageReasons, normalizeImageFindings, scoreReasons } from "./lib/scamShield";
 
 type Db = typeof db;
 
@@ -4130,7 +4130,7 @@ export const Actions = {
         checks.push("Read the uploaded screenshot with the AI vision model and compared what it shows with what you were told.");
         try {
           imageFindings = await aiComplete(
-            `You are examining an image a user uploaded to a scam-checking app. First describe in one short phrase what the image actually shows (for example 'a photo of a red car parked on a street' or 'a UPI payment success screen'). Then extract ONLY what is visibly readable in the image — never guess or invent. If a field is not visible, return null for it. Also describe any visible signs the image may have been edited or fabricated (mismatched fonts, misaligned text, blurred or pasted areas, inconsistent amounts or names). Your extraction will be used for a scam-risk check; you are NOT confirming the payment is real. If the image is not a payment screenshot at all, say so — a photo of a car, a person or anything else is not a scam by itself.`,
+            `You are examining an image a user uploaded to a scam-checking app. First describe in one short phrase what the image actually shows (for example 'a photo of a red car parked on a street' or 'a UPI payment success screen'). Then extract ONLY what is visibly readable in the image — never guess or invent. If a field is not visible, return null for it. Also describe any visible signs the image may have been edited or fabricated (mismatched fonts, misaligned text, blurred or pasted areas, inconsistent amounts or names). Your extraction will be used for a scam-risk check; you are NOT confirming the payment is real. If the image is not a payment screenshot at all, say so — a photo of a car, a person or anything else is not a scam by itself. Return ONLY JSON with exactly these keys, no other keys: readable (true/false — false only if the image is too blurry or dark to read at all), appearsToBePaymentScreenshot (true/false), imageDescription (one short phrase saying what the image shows), visibleText (all text you can read in the image, or ""), senderOrReceiverName (string or null), upiId (string or null), amountText (string or null), dateText (string or null), statusWording (string or null), editingSigns (string — "none" if you see no editing signs).`,
             {
               images: [{ dataBase64: args.imageBase64!, mimeType: args.imageMimeType ?? "image/jpeg", caption: "Uploaded image for scam check" }],
               schema: imageOutShape,
@@ -4140,6 +4140,11 @@ export const Actions = {
         } catch {
           imageFindings = null;
         }
+        // Normalize before use: the AI answer or the rule-based fallback
+        // may omit imageDescription, and the response shape requires it —
+        // without this the whole check errors out instead of returning a
+        // verdict (live failure 2026-11-19).
+        imageFindings = normalizeImageFindings(imageFindings);
         // Image scoring lives in server/lib/scamShield.ts: the AI judges
         // what the image actually is, so a photo of a car ends at
         // no_strong_signs instead of high_risk, and an unreadable image
