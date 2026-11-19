@@ -1057,9 +1057,17 @@ export function App() {
   const currencyMut = useMutation({
     mutationFn: (currency: string) =>
       api.updateBusiness({ ...stateQ.data!.business, currency }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       void stateQ.refetch();
-      notify("Currency updated.");
+      const c = res.conversion;
+      notify(
+        c
+          ? // 1 old unit = rate new units. fmtMoney(100, cur) renders
+            // "₹1" / "$1"; the rate is shown with 4 decimals by passing
+            // it as a cents value (rate × 100 minor units per unit).
+            `Currency updated — converted at the live rate: ${fmtMoney(100, c.from)} = ${fmtMoney(Math.round(c.rate * 10000) / 100, c.to, 4)}.`
+          : "Currency updated.",
+      );
     },
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
   });
