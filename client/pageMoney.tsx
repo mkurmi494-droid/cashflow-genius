@@ -21,6 +21,7 @@ type AppMode,
 type State,
 type Txn,
 } from "./lib";
+import { downloadBlob, txnsToXlsx } from "./xlsxExport";
 import type { PageProps } from "./types";
 import { Badge, CategorySelect, EmptyState, Field, Modal, SectionTitle } from "./components";
 
@@ -47,6 +48,7 @@ export function MoneyFlowPage({ state, notify, notifyDeleted, confirm }: PagePro
   const [toDate, setToDate] = useState("");
   const [search, setSearch] = useState("");
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [exportingXlsx, setExportingXlsx] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const del = useMutation({
@@ -221,6 +223,21 @@ export function MoneyFlowPage({ state, notify, notifyDeleted, confirm }: PagePro
             disabled={state.transactions.length === 0}
           >
             Export CSV
+          </button>
+          <button
+            type="button"
+            className="btn-ghost px-4 py-2 text-sm"
+            onClick={async () => {
+              setExportingXlsx(true);
+              try {
+                downloadBlob("cashflow-transactions.xlsx", await txnsToXlsx(state.transactions));
+              } finally {
+                setExportingXlsx(false);
+              }
+            }}
+            disabled={state.transactions.length === 0 || exportingXlsx}
+          >
+            {exportingXlsx ? "Exporting…" : "Export Excel"}
           </button>
           <button
             type="button"
