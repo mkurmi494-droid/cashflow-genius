@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, setAuthToken } from "./api";
-import { MODE_ICONS, MODE_LABELS, NOTE_CATEGORIES, downloadFile, isPersonalLike, modeOf, type AppMode, type Note } from "./lib";
+import { MODE_ICONS, MODE_LABELS, NOTE_CATEGORIES, currencyConfirmOptions, downloadFile, isPersonalLike, modeOf, workspaceHasMoney, type AppMode, type Note } from "./lib";
 import type { PageProps } from "./types";
 import { Badge, EmptyState, Field, Modal, ModePicker, SectionTitle } from "./components";
 import {
@@ -503,7 +503,7 @@ const TIMEZONES = [
   "UTC",
 ];
 
-export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShowTour }: PageProps) {
+export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShowTour, currencyBusy }: PageProps) {
   const b = state.business;
   const appMode = modeOf(state);
   const personal = isPersonalLike(appMode);
@@ -549,6 +549,24 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
     onSuccess: () => notify(personal ? "Profile saved." : "Business profile saved."),
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
   });
+  // Saving the profile with a different currency converts every amount
+  // in this workspace at the live rate, so a workspace with money asks
+  // first (same question as the top-bar selector). While any currency
+  // conversion is running — this save, or the top-bar one — the
+  // currency control below is disabled and shows Converting…, so a
+  // second conversion can never be fired behind the first.
+  const convertingNow = currency !== b.currency && (save.isPending || currencyBusy === true);
+  const submitProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (save.isPending || currencyBusy === true) return;
+    if (currency !== b.currency && workspaceHasMoney(state)) {
+      const ok = await confirm(
+        currencyConfirmOptions(b.currency, currency, MODE_LABELS[appMode]),
+      );
+      if (!ok) return;
+    }
+    save.mutate();
+  };
   const askSwitchMode = async (m: AppMode) => {
     if (m === appMode) return;
     const ok = await confirm({
@@ -1191,10 +1209,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         <SectionTitle title={personal ? "Your profile" : "Business profile"} />
         <form
           className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate();
-          }}
+          onSubmit={(e) => void submitProfile(e)}
         >
           <Field label={personal ? "Name for this space" : "Business name"}>
             <input className="field" value={name} onChange={(e) => setName(e.target.value)} aria-label="Business name" placeholder={personal ? "e.g. My Daily Spending" : "e.g. Sarya Design Studio"} />
@@ -1222,11 +1237,22 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             <input className="field" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country" />
           </Field>
           <Field label="Currency">
-            <select className="field" value={currency} onChange={(e) => setCurrency(e.target.value)} aria-label="Currency">
+            <select
+              className="field"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              aria-label="Currency"
+              disabled={save.isPending || currencyBusy === true}
+            >
               {CURRENCIES.map((c) => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
+            {convertingNow ? (
+              <p className="mt-1 text-xs font-bold text-[var(--accent)]" role="status">
+                Converting amounts to {currency}…
+              </p>
+            ) : null}
           </Field>
           <Field label={personal ? "Money you started with" : "Opening cash balance"}>
             <input className="field" type="number" step="1" value={opening} onChange={(e) => setOpening(e.target.value)} aria-label="Opening cash balance" />
@@ -1239,8 +1265,12 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             </select>
           </Field>
           <div className="sm:col-span-2">
-            <button type="submit" className="btn-primary px-6 py-2.5 text-sm" disabled={save.isPending}>
-              {save.isPending ? "Saving…" : "Save profile"}
+            <button
+              type="submit"
+              className="btn-primary px-6 py-2.5 text-sm"
+              disabled={save.isPending || currencyBusy === true}
+            >
+              {save.isPending ? "Saving…" : currencyBusy === true ? "Converting…" : "Save profile"}
             </button>
           </div>
         </form>
