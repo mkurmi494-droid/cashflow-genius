@@ -26,9 +26,9 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
       <div>
         <h3 className="text-sm font-extrabold">India-first, by design</h3>
         <ul className="mt-1 list-disc space-y-1 pl-5 text-sm leading-relaxed text-[var(--dim)]">
-          <li><strong className="text-[var(--text)]">UPI first:</strong> UPI is the first payment method on every entry, with voice entry (“500 rupees kharcha chai”) and paste-a-bank-SMS import that always asks you to confirm — and always tells you to verify in your bank/UPI app.</li>
+          <li><strong className="text-[var(--text)]">UPI first:</strong> UPI is the first payment method on every entry, with voice entry (“paid 500 for chai”) and paste-a-bank-SMS import that always asks you to confirm — and always tells you to verify in your bank/UPI app.</li>
           <li><strong className="text-[var(--text)]">INR + GST native:</strong> Indian numbering, GST-ready invoices with a GSTR-1 style export, EMI plans for products sold on instalments.</li>
-          <li><strong className="text-[var(--text)]">Hinglish AI CFO:</strong> ask in English, Hindi or Hinglish; answers come back in your chosen language, grounded in your own numbers — with the exact figures and dates used shown under every answer.</li>
+          <li><strong className="text-[var(--text)]">Multilingual AI CFO:</strong> ask in English or Hindi; answers come back in the language you asked in, grounded in your own numbers — with the exact figures and dates used shown under every answer.</li>
           <li><strong className="text-[var(--text)]">Scam Shield:</strong> fake UPI messages and payment-screenshot claims are checked for scam signs, because in India the fraud arrives on the same phone as the money.</li>
         </ul>
       </div>
@@ -64,7 +64,7 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
                 </tr>
                 <tr className="border-b border-[var(--border)]">
                   <td className="py-2 pr-3 font-bold text-[var(--text)]">India fit</td>
-                  <td className="py-2 pr-3">UPI, GST, INR, EMI, Hinglish, scam checks</td>
+                  <td className="py-2 pr-3">UPI, GST, INR, EMI, English + Hindi AI, scam checks</td>
                   <td className="py-2 pr-3">US-first, USD</td>
                   <td className="py-2 pr-3">GST yes; no personal money or scam shield</td>
                   <td className="py-2">Global accounting, not UPI-native</td>
