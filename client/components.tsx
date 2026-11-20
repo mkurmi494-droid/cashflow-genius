@@ -343,7 +343,7 @@ export function Sparkline({ values, positive }: { values: number[]; positive: bo
 }
 
 // ---------- Money mode picker (separate workspaces) ----------
-// Four selectable cards used at setup and in Settings. Purely
+// Three selectable cards used at setup and in Settings. Purely
 // presentational: the caller owns the value and persists it (setup form,
 // or the setMode action in Settings). Each mode is a completely separate
 // workspace with its own records — the copy says so plainly.
@@ -362,40 +362,24 @@ export function ModePicker({
     icon: string;
     title: string;
     body: string;
-    points: string[];
   }[] = [
     {
       id: "personal",
       icon: "☰",
       title: "Personal Money",
       body: "Your own everyday money — what comes in, what goes out daily.",
-      points: [
-        "Daily expenses & income with everyday categories",
-        "Budgets for food, bills, shopping and more",
-        "Its own workspace — nothing mixes with business money",
-      ],
     },
     {
       id: "business",
       icon: "▤",
       title: "Business Money",
       body: "Run a business's money — clients, invoices and growth.",
-      points: [
-        "Invoices with GST, GST & Tax estimates",
-        "Profit Leak Scanner & Business Reports",
-        "EMI plans and the full payment calendar",
-      ],
     },
     {
       id: "creator",
       icon: "✦",
       title: "Creator & Freelancer",
       body: "Client work, brand deals and platform payouts — kept apart from personal money.",
-      points: [
-        "Client payments, brand deals & platform income categories",
-        "Invoices for clients, with tax set-aside estimates",
-        "A separate workspace for your creator/freelance books",
-      ],
     },
   ];
   return (
@@ -430,14 +414,6 @@ export function ModePicker({
             </span>
             <span className="mt-3 block text-base font-extrabold">{o.title}</span>
             <span className="mt-1 block text-sm leading-relaxed text-[var(--dim)]">{o.body}</span>
-            <ul className="mt-3 space-y-1.5">
-              {o.points.map((p) => (
-                <li key={p} className="flex gap-2 text-xs leading-relaxed text-[var(--dim)]">
-                  <span aria-hidden className="text-[var(--accent)]">●</span>
-                  <span>{p}</span>
-                </li>
-              ))}
-            </ul>
           </button>
         );
       })}
