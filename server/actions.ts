@@ -2018,6 +2018,18 @@ const homeChatPlanZod = z.discriminatedUnion("kind", [
     type: z.enum(["income", "expense"]),
     description: z.string().max(200),
   }),
+  z.object({
+    kind: z.literal("edit_transaction"),
+    matchType: z.enum(["income", "expense"]),
+    matchAmountCents: z.number().int().positive().max(100_000_000_00).nullable(),
+    matchCategory: z.string().max(60).nullable(),
+    matchDescription: z.string().max(200),
+    matchDate: z.string(),
+    amountCents: z.number().int().positive().max(100_000_000_00).nullable(),
+    category: z.string().max(60).nullable(),
+    description: z.string().max(200).nullable(),
+    date: z.string().nullable(),
+  }),
   z.object({ kind: z.literal("change_currency"), currency: z.string().min(3).max(3) }),
 ]);
 
@@ -2059,6 +2071,55 @@ async function resolveDeleteMatch(
       error: `I found ${matches.length} transactions with that amount on that date — tell me which one (for example, its description or category).`,
     };
   return { ok: true, row: matches[0] };
+}
+
+/**
+ * Finds the one transaction an edit plan means: same workspace, type
+ * and day, then amount/category/description hints. Most recent first.
+ * Zero or several matches are both an error — an edit must never
+ * guess which entry the owner meant.
+ */
+async function resolveEditMatch(
+  ownerId: string,
+  wsMode: string,
+  plan: Extract<HomeChatPlan, { kind: "edit_transaction" }>,
+): Promise<{ ok: true; row: typeof schema.transactions.$inferSelect } | { ok: false; error: string }> {
+  const rows = await db
+    .select()
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.ownerId, ownerId),
+        eq(schema.transactions.mode, wsMode),
+        eq(schema.transactions.type, plan.matchType),
+        eq(schema.transactions.date, plan.matchDate),
+      ),
+    );
+  const amount = plan.matchAmountCents;
+  const cat = (plan.matchCategory ?? "").trim().toLowerCase();
+  const hint = plan.matchDescription.trim().toLowerCase();
+  const matches = rows.filter(
+    (t) =>
+      (amount === null || t.amountCents === amount) &&
+      (!cat || (t.category || "").toLowerCase().includes(cat)) &&
+      (!hint ||
+        (t.description || "").toLowerCase().includes(hint) ||
+        (t.category || "").toLowerCase().includes(hint)),
+  );
+  if (matches.length === 0)
+    return {
+      ok: false,
+      error: "I couldn't find that transaction in this workspace — check the amount, category and date.",
+    };
+  const sorted = [...matches].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+  if (sorted.length > 1)
+    return {
+      ok: false,
+      error: `I found ${sorted.length} transactions that match — tell me which one (for example, its amount or description).`,
+    };
+  return { ok: true, row: sorted[0] };
 }
 
 /**
@@ -2171,6 +2232,39 @@ async function executeHomeChatPlan(
           active: true,
         });
         return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "edit_transaction": {
+        const found = await resolveEditMatch(userId, wsMode, plan);
+        if (!found.ok) return { ok: false, error: found.error };
+        if (found.row.invoiceId)
+          return {
+            ok: false,
+            error: "That transaction is linked to an invoice payment and can't be edited from here.",
+          };
+        const old = found.row;
+        const next = {
+          type: old.type,
+          status: old.status,
+          category: plan.category ?? old.category,
+          description: plan.description ?? old.description,
+          counterparty: old.counterparty,
+          amountCents: plan.amountCents ?? old.amountCents,
+          date: plan.date ?? old.date,
+        };
+        await Actions.saveTransaction.handler(ctx, {
+          token,
+          id: old.id,
+          ...next,
+          paymentMethod: old.paymentMethod,
+        });
+        const changes: string[] = [];
+        if (next.amountCents !== old.amountCents)
+          changes.push(`amount ${fmt(old.amountCents)} → ${fmt(next.amountCents)}`);
+        if (next.category !== old.category) changes.push(`category ${old.category} → ${next.category}`);
+        if (next.date !== old.date) changes.push(`date ${old.date} → ${next.date}`);
+        if (next.description !== old.description) changes.push("description updated");
+        const line = `Changed the ${old.type} of ${fmt(old.amountCents)} · ${old.category} · ${old.date}: ${changes.join("; ")}.`;
+        return { ok: true, reply: line, summary: line, undoId: null, undoKind: null };
       }
       case "delete_transaction": {
         const found = await resolveDeleteMatch(userId, wsMode, plan);
@@ -6281,7 +6375,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
   // was needed.
   askHomeChat: defineAction({
     description:
-      "Home-screen AI chat: answers in the owner's language from the active workspace's real figures, and carries out spoken requests — add a transaction or budget, start a savings goal, deposit into a pot, record a lend/borrow, add a note or a recurring bill. Safe, complete requests execute at once; deletes, currency changes and anything doubtful return a confirm card instead and never execute until confirmed.",
+      "Home-screen AI chat: answers in the owner's language from the active workspace's real figures, and carries out spoken requests — add a transaction or budget, edit a transaction, start a savings goal, deposit into a pot, record a lend/borrow, add a note or a recurring bill. Safe, complete requests execute at once; deletes, currency changes and anything doubtful return a confirm card instead and never execute until confirmed.",
     request: z.object({
       token: z.string().max(200).optional(),
       message: z.string().min(1).max(1000),
@@ -6446,11 +6540,13 @@ OWNER'S MESSAGE: ${args.message}
 
 Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action" | "confirm" | "clarify", "reply": "...", "question": "...", "plan": {...}} — omit "question" and "plan" when they do not apply.
 - "chat": just talking or answering — no work to do. "reply" is the answer.
-- "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
-- "confirm": ONLY when the request is a delete or a currency change. NEVER use "confirm" for an add of any kind — add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note and add_recurring always execute immediately with "action", even if you feel unsure (if a detail is genuinely missing, use "clarify" and ask instead of guessing). Put the plan in "plan" and what it does in "question". When kind is "confirm", phrase "reply" as a proposal you are asking about (for example "Shall I delete the ₹500 food expense from 20 Nov?") — NEVER write "Done" or describe the work as already finished, because nothing has happened yet.
+- "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, edit_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
+- "confirm": ONLY when the request is a delete or a currency change. NEVER use "confirm" for an add or an edit of any kind — add_transaction, edit_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note and add_recurring always execute immediately with "action", even if you feel unsure (if a detail is genuinely missing, use "clarify" and ask instead of guessing). Put the plan in "plan" and what it does in "question". When kind is "confirm", phrase "reply" as a proposal you are asking about (for example "Shall I delete the ₹500 food expense from 20 Nov?") — NEVER write "Done" or describe the work as already finished, because nothing has happened yet.
 - "clarify": something essential is missing (no amount, no date, no name, no goal). Put the question in "question" and no plan.
+CORRECTIONS — the owner often fixes what they just said, for example "1000 nahi, 1500 karo", "wo food wala 1500 kar do", "usko kal ka kar do", "wo galti se 1000 ho gaya, 1500 tha". That is an EDIT, never a second entry: use edit_transaction with kind "action", matching the entry from the RECENT CONVERSATION and the Recent transactions above (its amount, category and date) and changing only what they correct. "wo"/"usko"/"that one" means the entry just added or just talked about. If you cannot tell which entry they mean, ask ("clarify") instead of adding or editing anything. A correction must never create a duplicate entry.
 Plan shapes (exact keys, no others). IMPORTANT: "plan" IS the plan object itself — {"kind":"add_transaction",...}. NEVER wrap it in a key named after its kind (no {"add_transaction": {...}}).
 - add_transaction: {"kind":"add_transaction","type":"income"|"expense","amountCents":number,"category":"...","description":"...","counterparty":"...","date":"yyyy-mm-dd"}
+- edit_transaction: {"kind":"edit_transaction","matchType":"income"|"expense","matchAmountCents":number|null,"matchCategory":"..."|null,"matchDescription":"...","matchDate":"yyyy-mm-dd","amountCents":number|null,"category":"..."|null,"description":"..."|null,"date":"yyyy-mm-dd"|null} — match* finds the entry to change (give at least one of matchAmountCents/matchCategory/matchDescription; matchDate is the entry's date, usually today). The other fields are the NEW values (null = keep unchanged; give at least one change).
 - add_budget: {"kind":"add_budget","category":"...","monthlyLimitCents":number}
 - add_savings_goal: {"kind":"add_savings_goal","name":"...","targetCents":number,"targetDate":"yyyy-mm-dd"}
 - deposit_savings: {"kind":"deposit_savings","goalName":"...","amountCents":number,"date":"yyyy-mm-dd"}
