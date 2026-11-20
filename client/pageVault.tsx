@@ -4,6 +4,7 @@ import { api, setAuthToken } from "./api";
 import { MODE_ICONS, MODE_LABELS, NOTE_CATEGORIES, currencyConfirmOptions, downloadFile, isPersonalLike, modeOf, workspaceHasMoney, type AppMode, type Note } from "./lib";
 import type { PageProps } from "./types";
 import { Badge, EmptyState, Field, Modal, ModePicker, SectionTitle } from "./components";
+import { CurrencyPicker } from "./currencyPicker";
 import {
 CURSOR_OPTIONS,
 applyCursorStyle,
@@ -491,7 +492,6 @@ function VersionsModal({
 
 // ---------------- Settings ----------------
 
-const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED"];
 const TIMEZONES = [
   "Asia/Kolkata",
   "Asia/Dubai",
@@ -1077,17 +1077,11 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             <input className="field" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country" />
           </Field>
           <Field label="Currency">
-            <select
-              className="field"
+            <CurrencyPicker
               value={currency}
-              onChange={(e) => setCurrency(e.target.value)}
-              aria-label="Currency"
+              onChange={setCurrency}
               disabled={save.isPending || currencyBusy === true}
-            >
-              {CURRENCIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
+            />
             {convertingNow ? (
               <p className="mt-1 text-xs font-bold text-[var(--accent)]" role="status">
                 Converting amounts to {currency}…
