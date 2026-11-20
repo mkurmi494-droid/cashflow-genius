@@ -41,6 +41,18 @@ import type { db } from "./db";
 
 type Db = typeof db;
 
+/** The legacy Student workspace row is invisible to the app. Student /
+ *  First Salary was removed 2026-11-20 and folds into Personal, but
+ *  the empty legacy row still sits in the DB (Postgres cannot drop the
+ *  enum value). A raw "student" mode in a response fails the 3-mode
+ *  zod schemas and breaks getState outright — seen live 2026-11-20
+ *  13:29 IST, when the app would not load at all after sign-in. The
+ *  cast is needed because the Drizzle type no longer includes
+ *  "student", while the stored row still carries it. */
+function withoutLegacyStudent<T extends { mode: string }>(rows: T[]): T[] {
+  return rows.filter((r) => (r.mode as string) !== "student");
+}
+
 export type BusinessRow = typeof schema.businesses.$inferSelect;
 export type TxnRow = typeof schema.transactions.$inferSelect;
 export type InvRow = typeof schema.invoices.$inferSelect;
@@ -172,7 +184,7 @@ export async function loadWorkspacePrelude(
   }>;
   return {
     state: row?.state ?? null,
-    businesses: reviveDates(row?.businesses ?? [], "businesses"),
+    businesses: withoutLegacyStudent(reviveDates(row?.businesses ?? [], "businesses")),
   };
 }
 
@@ -528,7 +540,7 @@ export async function loadCombinedBatch(
     reviveDates(((doc[key] ?? []) as T[]), key);
   return {
     state: (doc.state as WorkspaceStateRow | null) ?? null,
-    businesses: take<BusinessRow>("businesses"),
+    businesses: withoutLegacyStudent(take<BusinessRow>("businesses")),
     transactions: take<TxnRow>("transactions"),
     invoices: take<InvRow>("invoices"),
     invoiceItems: take<ItemRow>("invoiceItems"),
