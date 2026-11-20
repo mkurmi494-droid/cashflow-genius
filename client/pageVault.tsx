@@ -515,17 +515,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
   const [ownerEmail, setOwnerEmail] = useState(b.ownerEmail);
   const [ownerPhone, setOwnerPhone] = useState(b.ownerPhone);
 
-  // Live connection status, probed server-side when Settings opens (and
-  // cached for 5 minutes): the database and AI engine are checked with real
-  // calls; the AI CFO runs on the shared ChatGPT key, so nothing is asked
-  // of the user here.
-  const integrations = useQuery({
-    queryKey: ["cg-integrations"],
-    queryFn: () => api.getIntegrationStatus({}),
-    staleTime: 5 * 60 * 1000,
-    retry: 1,
-  });
-
   const save = useMutation({
     mutationFn: () =>
       api.updateBusiness({
@@ -1055,77 +1044,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             </div>
           </form>
         </section>
-
-      <section className="card p-5" aria-label="Live connections">
-        <SectionTitle
-          title="Live connections"
-          hint="Checked on the server just now — nothing here is assumed"
-          action={
-            <button
-              type="button"
-              className="btn-ghost px-3 py-1.5 text-xs"
-              onClick={() => void integrations.refetch()}
-              disabled={integrations.isFetching}
-            >
-              {integrations.isFetching ? "Checking…" : "Re-check"}
-            </button>
-          }
-        />
-        {integrations.isPending ? (
-          <div className="space-y-2" aria-busy="true" aria-label="Checking connections">
-            <div className="skeleton h-16" />
-            <div className="skeleton h-16" />
-            <div className="skeleton h-16" />
-            <div className="skeleton h-16" />
-          </div>
-        ) : integrations.isError || !integrations.data ? (
-          <div className="rounded-xl bg-[var(--err)] p-3 text-sm text-[var(--err-text)]">
-            The connection check could not run just now.{" "}
-            <button type="button" className="font-bold underline" onClick={() => void integrations.refetch()}>
-              Try again
-            </button>
-          </div>
-        ) : (
-          <>
-            <ul className="divide-y divide-[var(--border)]">
-              {integrations.data.services.map((s) => (
-                <li key={s.id} className="py-3 first:pt-0 last:pb-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span
-                      aria-hidden
-                      className={`h-2.5 w-2.5 rounded-full ${s.status === "live" ? "bg-[var(--accent)]" : "bg-[#f59e0b]"}`}
-                    />
-                    <span className="text-sm font-extrabold">{s.name}</span>
-                    {s.status === "live" ? (
-                      <Badge tone="mint">● Live</Badge>
-                    ) : (
-                      <Badge tone="gold">Not connected</Badge>
-                    )}
-                  </div>
-                  <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">{s.detail}</p>
-                  {s.needed ? (
-                    <p className="mt-1 rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-xs leading-relaxed text-[var(--dim)]">
-                      {s.needed}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-xs text-[var(--dim)]">
-              Last checked{" "}
-              {new Date(integrations.data.checkedAt).toLocaleString("en-IN", {
-                timeZone: timezone,
-                day: "numeric",
-                month: "short",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}
-              . A service is marked “Live” only after a real check succeeds.
-            </p>
-          </>
-        )}
-      </section>
 
       <section className="card p-5" aria-label="Business profile">
         <SectionTitle title={personal ? "Your profile" : "Business profile"} />
