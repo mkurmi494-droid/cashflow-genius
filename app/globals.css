@@ -263,6 +263,16 @@ body {
   0%, 100% { transform: translateY(0) scale(1); }
   50% { transform: translateY(-4px) scale(1.04); }
 }
+/* Cashflow Genius loading mark: the Sprout logo breathing gently
+   while a load is in flight (app boot, workspace switch, CFO
+   thinking). Infinite animation, no fill-mode — no transform ever
+   persists, so fixed descendants (like the CFO composer) are
+   unaffected. */
+@keyframes cg-loader-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.12); opacity: 0.75; }
+}
+.cg-loader { animation: cg-loader-pulse 1.4s ease-in-out infinite; }
 
 .page-anim {
   animation: page-in 0.45s cubic-bezier(0.22, 0.9, 0.3, 1) both;
@@ -387,12 +397,12 @@ label {
   from { opacity: 0; transform: translateY(14px); }
   /* NOTE: the "to" keyframe must NOT set a transform. With fill-mode
      "both" (used by .page-anim > *), a persisted transform — even
-  translateY(0) — makes that ancestor the containing block for
-  position:fixed descendants, so the AI CFO composer (fixed bottom-16)
-  scrolled away with the page instead of staying pinned. Keep the
-  final keyframe opacity-only so no transform survives the animation. */
-to { opacity: 1; }
-  }
+     translateY(0) — makes that ancestor the containing block for
+     position:fixed descendants, so the AI CFO composer (fixed bottom-16)
+     scrolled away with the page instead of staying pinned. Keep the
+     final keyframe opacity-only so no transform survives the animation. */
+  to { opacity: 1; }
+}
 @keyframes cg-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
