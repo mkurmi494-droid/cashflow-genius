@@ -11,6 +11,9 @@
 // is rejected, (13) add_transaction does NOT need confirm,
 // (14) an unknown plan kind is rejected, (15) a non-object plan is
 // rejected, (16) describePlan writes a plain-language line.
+// (17+) effectiveReplyKind: a model "confirm" with a safe add plan
+// executes at once (owner's decision, 2026-11-20), with a delete it
+// still waits, and a plan on a "chat" reply never executes.
 // Run: node scripts/home-chat-test.mjs   (exit 1 on any failure)
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -262,6 +265,50 @@ check(
   "describePlan change_currency",
   mod.describePlan(cur.plan, fmt),
   "Change this workspace's currency to USD (every amount converts at the live rate)",
+);
+// (17+) effectiveReplyKind — adds execute immediately (owner's decision,
+// 2026-11-20), even when the model hedged with kind "confirm"; only
+// delete/currency wait; a plan on a "chat" reply never executes.
+check(
+  'model "confirm" + add_transaction executes at once',
+  mod.effectiveReplyKind("confirm", txn.plan),
+  "action",
+);
+check(
+  'model "confirm" + delete_transaction still waits',
+  mod.effectiveReplyKind("confirm", del.plan),
+  "confirm",
+);
+check(
+  'model "action" + add_transaction executes',
+  mod.effectiveReplyKind("action", txn.plan),
+  "action",
+);
+check(
+  'model "chat" + add_transaction never executes',
+  mod.effectiveReplyKind("chat", txn.plan),
+  "chat",
+);
+check(
+  'model "confirm" + nested add_transaction executes at once',
+  mod.effectiveReplyKind(
+    "confirm",
+    mod.normalizeHomeChatPlan(
+      {
+        add_transaction: {
+          kind: "add_transaction",
+          type: "expense",
+          amountCents: 50000,
+          category: "Food",
+          description: "Food expense",
+          counterparty: "N/A",
+          date: "2026-11-20",
+        },
+      },
+      TODAY,
+    ).plan,
+  ),
+  "action",
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
