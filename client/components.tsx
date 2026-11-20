@@ -62,6 +62,28 @@ export function LogoMark({ className = "h-6 w-6" }: { className?: string }) {
   );
 }
 
+// A calculator that looks like one — body, display and key grid —
+// drawn with strokes so it follows the surrounding text colour.
+// Replaces the 🧮 abacus emoji, which reads as beads, not a calculator.
+export function CalcIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5" y="2.5" width="14" height="19" rx="2.5" />
+      <rect x="7.5" y="5" width="9" height="3.5" rx="1" />
+      <path d="M7.5 12.5h2M11 12.5h2M14.5 12.5h2M7.5 16h2M11 16h2M14.5 16h2M7.5 19.5h2M11 19.5h2M14.5 19.5h2" />
+    </svg>
+  );
+}
+
 export function GlassOrb({
   size = 190,
   label,
