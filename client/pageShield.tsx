@@ -285,20 +285,17 @@ export function ScamShieldPage({ state }: PageProps) {
           >
             {analyse.isPending ? "Checking…" : "🛡️ Check this for scam signs"}
           </button>
-          <p className="text-center text-xs text-[var(--dim)]">
-            Tip: paste a message or upload a screenshot first, then press Check. If you give both, both will be checked.
-          </p>
         </div>
       </section>
 
       {result ? <ResultPanel result={result} /> : null}
 
       <section aria-label="Previous scam checks">
-        <SectionTitle title="Your recent checks" hint="Only your checks, saved in your account — so you can look at past warnings again." />
+        <SectionTitle title="Your recent checks" hint="Your past checks." />
         {state.scamChecks.length === 0 ? (
           <EmptyState
             title="No checks yet"
-            body="Whenever a message or screenshot looks suspicious, check it here. Your check history will appear here."
+            body="Check a suspicious message or screenshot here."
           />
         ) : (
           <ul className="space-y-2">
