@@ -31,10 +31,308 @@ summarise,
 todayStr,
 } from "./lib";
 import type { PageProps } from "./types";
-import { Badge, CategorySelect, EmptyState, Field, SectionTitle } from "./components";
+import { Badge, CategorySelect, EmptyState, Field, Modal, SectionTitle } from "./components";
+import { LoadingMark } from "./LoadingMark";
 import { AnimatedMoney } from "./anim";
 
 type Finding = ApiResponse<typeof api, "runScan">["findings"][number];
+
+/** Average posted income a month over the last 3 complete months
+ *  (the same grounding the server uses when no figure is typed). */
+function avgMonthlyIncomeCents(state: PageProps["state"]): number {
+  const curKey = monthKey(todayStr());
+  const months = [shiftMonth(curKey, -3), shiftMonth(curKey, -2), shiftMonth(curKey, -1)];
+  const byMonth = new Map<string, number>();
+  for (const t of state.transactions) {
+    if (t.status !== "posted" || t.type !== "income") continue;
+    const k = monthKey(t.date);
+    if (!months.includes(k)) continue;
+    byMonth.set(k, (byMonth.get(k) ?? 0) + t.amountCents);
+  }
+  const vals = [...byMonth.values()].filter((v) => v > 0);
+  return vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : 0;
+}
+
+// ---------------- AI budget planner ----------------
+// The AI only suggests: the user picks the rule (50/30/20 or their
+// own percentages), the planner shows the suggestion as editable
+// rows, and budgets are written only when they tap Save — one
+// saveBudget per confirmed row. While the AI works, the Sprout
+// loader keeps the wait visible ("Customizing your budget…").
+function BudgetPlannerModal({
+  state,
+  currency,
+  onClose,
+  notify,
+}: {
+  state: PageProps["state"];
+  currency: string;
+  onClose: () => void;
+  notify: (m: string) => void;
+}) {
+  const avgIncome = useMemo(() => avgMonthlyIncomeCents(state), [state]);
+  const [income, setIncome] = useState(avgIncome > 0 ? String(avgIncome / 100) : "");
+  const [lifestyle, setLifestyle] = useState("");
+  const [rule, setRule] = useState<"50-30-20" | "custom">("50-30-20");
+  const [needsPct, setNeedsPct] = useState("50");
+  const [wantsPct, setWantsPct] = useState("30");
+  const [savingsPct, setSavingsPct] = useState("20");
+  const [suggestion, setSuggestion] = useState<ApiResponse<typeof api, "suggestBudget"> | null>(null);
+  const [rows, setRows] = useState<{ category: string; bucket: "needs" | "wants"; amount: string }[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const incomeCents = Math.round((parseFloat(income) || 0) * 100);
+  const pctSum = (parseInt(needsPct) || 0) + (parseInt(wantsPct) || 0) + (parseInt(savingsPct) || 0);
+
+  const suggest = useMutation({
+    mutationFn: async () => {
+      if (incomeCents <= 0) throw new Error("Enter your monthly income — the budget is a split of it.");
+      if (rule === "custom" && pctSum !== 100) throw new Error("Your three percentages must add up to 100.");
+      return await api.suggestBudget({
+        monthlyIncomeCents: incomeCents,
+        rule,
+        ...(rule === "custom"
+          ? {
+              needsPct: parseInt(needsPct) || 0,
+              wantsPct: parseInt(wantsPct) || 0,
+              savingsPct: parseInt(savingsPct) || 0,
+            }
+          : {}),
+        lifestyle: lifestyle.trim() || undefined,
+      });
+    },
+    onSuccess: (res) => {
+      setSuggestion(res);
+      setRows(
+        res.allocations.map((a) => ({
+          category: a.category,
+          bucket: a.bucket,
+          amount: String(a.monthlyCents / 100),
+        })),
+      );
+      setError(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  const [saving, setSaving] = useState(false);
+  const saveAll = async () => {
+    const valid = rows.filter((r) => r.category.trim() && (parseFloat(r.amount) || 0) > 0);
+    if (valid.length === 0) {
+      setError("Nothing to save — check the amounts.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    let saved = 0;
+    const failed: string[] = [];
+    for (const r of valid) {
+      try {
+        await api.saveBudget({
+          category: r.category.trim().slice(0, 60),
+          monthlyLimitCents: Math.round((parseFloat(r.amount) || 0) * 100),
+        });
+        saved++;
+      } catch {
+        failed.push(r.category);
+      }
+    }
+    setSaving(false);
+    if (saved > 0) {
+      notify(
+        `${saved} budget${saved > 1 ? "s" : ""} saved${failed.length ? ` — ${failed.length} could not be saved, try them again` : ""}. Run the scan again to check them.`,
+      );
+    }
+    if (failed.length === 0) onClose();
+    else setError(`Could not save: ${failed.join(", ")}. The rest are saved — fix these and try again.`);
+  };
+
+  const rowsTotal = rows.reduce((s, r) => s + Math.round((parseFloat(r.amount) || 0) * 100), 0);
+
+  return (
+    <Modal title="✦ Plan your budget with AI" onClose={onClose}>
+      {suggest.isPending ? (
+        <div className="py-6 text-center">
+          <LoadingMark label="Customizing your budget…" />
+          <p className="mt-1 text-sm text-[var(--dim)]">
+            Shaping your split from your real income and spending — this usually takes a few seconds.
+          </p>
+        </div>
+      ) : suggestion ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge tone="ai">{suggestion.source === "ai" ? "Suggested by AI" : "Suggested by the 50/30/20 rule"}</Badge>
+            <span className="font-bold">
+              Needs {suggestion.needsPct}% · Wants {suggestion.wantsPct}% · Savings {suggestion.savingsPct}%
+            </span>
+            <span className="text-[var(--dim)]">of {fmtMoney(suggestion.monthlyIncomeCents, currency)} / month</span>
+          </div>
+          {suggestion.note ? (
+            <p className="rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-sm leading-relaxed">{suggestion.note}</p>
+          ) : null}
+          <p className="text-xs leading-relaxed text-[var(--dim)]">
+            Edit any amount before saving — nothing is set yet. The AI only suggests; you decide.
+          </p>
+          <ul className="space-y-2">
+            {rows.map((r, i) => (
+              <li key={`${r.category}-${i}`} className="flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-white p-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold">{r.category}</p>
+                  <p className="text-xs text-[var(--dim)]">{r.bucket === "needs" ? "Needs" : "Wants"}</p>
+                </div>
+                <label className="block w-32 shrink-0">
+                  <span className="sr-only">Monthly budget for {r.category}</span>
+                  <input
+                    className="field tnum px-2 py-1.5 text-sm font-bold"
+                    type="number"
+                    inputMode="decimal"
+                    step="1"
+                    min="0"
+                    value={r.amount}
+                    onChange={(e) =>
+                      setRows((xs) => xs.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))
+                    }
+                    aria-label={`Monthly budget for ${r.category}`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full px-2 py-1 text-xs font-bold text-[var(--dim)]"
+                  aria-label={`Remove ${r.category}`}
+                  onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-bold">Budgets total</span>
+            <span className="tnum font-extrabold">{fmtMoney(rowsTotal, currency)} / month</span>
+          </div>
+          <div className="text-sm text-[var(--dim)]">
+            <span className="font-bold text-[var(--text)]">Saving {fmtMoney(Math.max(0, suggestion.monthlyIncomeCents - rowsTotal), currency)} / month</span>
+            {" "}— the part of your income left after these budgets.
+          </div>
+          {error ? (
+            <p className="rounded-xl bg-[var(--err)] px-3 py-2 text-xs font-semibold text-[var(--err-text)]" role="alert">{error}</p>
+          ) : null}
+          <div className="flex gap-2">
+            <button type="button" className="btn-ghost flex-1 px-4 py-3 text-sm" onClick={() => { setSuggestion(null); setRows([]); }}>
+              Start over
+            </button>
+            <button type="button" className="btn-primary flex-1 px-4 py-3 text-sm" disabled={saving || rows.length === 0} onClick={() => void saveAll()}>
+              {saving ? "Saving…" : `Save ${rows.length} budget${rows.length > 1 ? "s" : ""}`}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setError(null);
+            suggest.mutate();
+          }}
+        >
+          <Field label={`Monthly income (${currency})`}>
+            <input
+              className="field tnum"
+              type="number"
+              inputMode="decimal"
+              step="1"
+              min="0"
+              value={income}
+              onChange={(e) => setIncome(e.target.value)}
+              aria-label="Monthly income for the budget"
+              placeholder="e.g. 60000"
+              required
+            />
+          </Field>
+          <p className="-mt-2 text-xs text-[var(--dim)]">
+            {avgIncome > 0
+              ? `Filled in from your records — your average posted income over the last 3 complete months. Change it if this month is different.`
+              : `No income in the last 3 months — type your monthly income.`}
+          </p>
+          <div>
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">Your rule</span>
+            <div className="grid grid-cols-2 gap-1 rounded-full border border-[var(--border)] bg-white p-1" role="group" aria-label="Budget rule">
+              {(
+                [
+                  { key: "50-30-20", label: "50 / 30 / 20" },
+                  { key: "custom", label: "My own rule" },
+                ] as const
+              ).map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => setRule(r.key)}
+                  aria-pressed={rule === r.key}
+                  className={`rounded-full px-2 py-2 text-xs font-bold ${rule === r.key ? "bg-[var(--accent)] text-white" : "text-[var(--dim)]"}`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            {rule === "50-30-20" ? (
+              <p className="mt-1.5 text-xs leading-relaxed text-[var(--dim)]">
+                The classic split: 50% needs, 30% wants, 20% savings — shaped by what you actually spend.
+              </p>
+            ) : (
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {(
+                  [
+                    { key: "needs", label: "Needs %", value: needsPct, set: setNeedsPct },
+                    { key: "wants", label: "Wants %", value: wantsPct, set: setWantsPct },
+                    { key: "savings", label: "Savings %", value: savingsPct, set: setSavingsPct },
+                  ] as const
+                ).map((f) => (
+                  <label key={f.key} className="block">
+                    <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">{f.label}</span>
+                    <input
+                      className="field tnum px-2 py-1.5 text-sm font-bold"
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      max="100"
+                      value={f.value}
+                      onChange={(e) => f.set(e.target.value)}
+                      aria-label={f.label}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            {rule === "custom" ? (
+              <p className={`mt-1.5 text-xs font-bold ${pctSum === 100 ? "text-[var(--dim)]" : "text-[var(--err-text)]"}`}>
+                Your three percentages add up to {pctSum} — they must total 100.
+              </p>
+            ) : null}
+          </div>
+          <Field label="About your life (optional)">
+            <input
+              className="field"
+              value={lifestyle}
+              onChange={(e) => setLifestyle(e.target.value)}
+              aria-label="About your life, for the budget suggestion"
+              placeholder="e.g. I eat out a lot, I am saving for a bike"
+              maxLength={500}
+            />
+          </Field>
+          {error ? (
+            <p className="rounded-xl bg-[var(--err)] px-3 py-2 text-xs font-semibold text-[var(--err-text)]" role="alert">{error}</p>
+          ) : null}
+          <button type="submit" className="btn-primary w-full px-6 py-3 text-sm" disabled={suggest.isPending}>
+            Create my budget →
+          </button>
+          <p className="text-center text-[11px] leading-relaxed text-[var(--dim)]">
+            The AI only suggests — nothing is saved until you check the amounts and tap Save.
+          </p>
+        </form>
+      )}
+    </Modal>
+  );
+}
 
 // ---------------- Profit Leak Scanner ----------------
 
@@ -47,6 +345,7 @@ export function ScannerPage({ state, notify, notifyDeleted, confirm, saveToVault
   const [budgetCat, setBudgetCat] = useState(expenseCategoriesFor(mode)[0]!);
   const [budgetCustom, setBudgetCustom] = useState("");
   const [budgetAmt, setBudgetAmt] = useState("");
+  const [showPlanner, setShowPlanner] = useState(false);
   const budgetIsCustom = budgetCat === CUSTOM_CATEGORY;
   const effectiveBudgetCat = budgetIsCustom ? budgetCustom.trim() : budgetCat;
 
@@ -195,6 +494,13 @@ export function ScannerPage({ state, notify, notifyDeleted, confirm, saveToVault
 
       <section className="card p-5" aria-label="Category budgets">
         <SectionTitle title="Category budgets" hint="The scanner flags any category that passes its monthly budget" />
+        <button
+          type="button"
+          className="btn-primary mb-4 px-4 py-2.5 text-sm"
+          onClick={() => setShowPlanner(true)}
+        >
+          ✦ Plan with AI — 50/30/20 or your own rule
+        </button>
         {state.budgets.length > 0 ? (
           <ul className="mb-4 divide-y divide-[var(--border)]">
             {state.budgets.map((b) => (
@@ -265,6 +571,9 @@ export function ScannerPage({ state, notify, notifyDeleted, confirm, saveToVault
           ) : null}
         </form>
       </section>
+      {showPlanner ? (
+        <BudgetPlannerModal state={state} currency={cur} onClose={() => setShowPlanner(false)} notify={notify} />
+      ) : null}
     </div>
   );
 }
