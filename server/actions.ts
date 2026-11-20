@@ -47,6 +47,13 @@ import {
   parseSmartEntryText,
   type SmartEntryResult,
 } from "./lib/smartEntry";
+import {
+  isLendBorrowDirection,
+  normalizeLendBorrow,
+  sortLendBorrow,
+  type LendBorrowDirection,
+  type LendBorrowRecord,
+} from "./lib/lendBorrow";
 
 type Db = typeof db;
 
@@ -2352,6 +2359,7 @@ export const Actions = {
           emiInstalments: 0,
           savingsGoals: 0,
           savingsTransfers: 0,
+          lendBorrow: 0,
         };
         if (effectiveConverting) {
           // One SQL fragment per column: ROUND(col * rate) as bigint.
@@ -2431,6 +2439,13 @@ export const Actions = {
               .set({ amountCents: conv(schema.savingsTransfers.amountCents) })
               .where(owned(schema.savingsTransfers.ownerId, schema.savingsTransfers.mode))
               .returning({ id: schema.savingsTransfers.id })
+          ).length;
+          counts.lendBorrow = (
+            await tx
+              .update(schema.lendBorrow)
+              .set({ amountCents: conv(schema.lendBorrow.amountCents) })
+              .where(owned(schema.lendBorrow.ownerId, schema.lendBorrow.mode))
+              .returning({ id: schema.lendBorrow.id })
           ).length;
           // Genius Insights are priced in the old currency — drop the
           // last-run marker so getInsights regenerates them in the new
@@ -3026,6 +3041,209 @@ export const Actions = {
         // instead of breaking the Savings page.
         return { schedules: [] };
       }
+    },
+  }),
+
+  getLendBorrow: defineAction({
+    description:
+      "Lists the lend/borrow entries for the signed-in workspace: money lent (owed to me) and money borrowed (I owe), with person, amount, date, due date and settled state. Sorted overdue first, then earliest due date.",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({
+      entries: z.array(
+        z.object({
+          id: z.string(),
+          person: z.string(),
+          direction: z.enum(["lent", "borrowed"]),
+          amountCents: z.number(),
+          date: z.string(),
+          dueDate: z.string().nullable(),
+          note: z.string(),
+          status: z.enum(["open", "settled"]),
+          settledDate: z.string().nullable(),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      try {
+        const rows = await db
+          .select()
+          .from(schema.lendBorrow)
+          .where(
+            and(
+              eq(schema.lendBorrow.ownerId, user.id),
+              eq(schema.lendBorrow.mode, wsMode),
+            ),
+          )
+          .orderBy(asc(schema.lendBorrow.createdAt));
+        const today = todayStrIst();
+        const entries: (LendBorrowRecord & { id: string })[] = rows.map((r) => ({
+          id: r.id,
+          person: r.person,
+          direction: (isLendBorrowDirection(r.direction) ? r.direction : "lent") as LendBorrowDirection,
+          amountCents: r.amountCents,
+          date: r.date,
+          dueDate: r.dueDate,
+          note: r.note,
+          status: r.status === "settled" ? "settled" : "open",
+          settledDate: r.settledDate,
+        }));
+        return { entries: sortLendBorrow(entries, today) };
+      } catch (e) {
+        // The code can ship before migration 0006 is applied: until the
+        // lend_borrow table exists, report an honest empty list
+        // instead of breaking the page.
+        return { entries: [] };
+      }
+    },
+  }),
+
+  saveLendBorrow: defineAction({
+    description:
+      "Creates or edits one lend/borrow entry in one workspace (Personal, Business or Creator). Settling is a separate action; saving never moves money or creates a transaction.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      id: z.string().optional(),
+      person: z.string().min(1).max(120),
+      direction: z.enum(["lent", "borrowed"]),
+      amountCents: z.number().int().positive().max(100_000_000_00),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      note: z.string().max(500).optional(),
+      mode: z.enum(["business", "personal", "creator"]).optional(),
+    }),
+    response: z.object({ id: z.string(), mode: z.string() }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const active = await activeMode(db, user.id);
+      const normalized = normalizeLendBorrow({
+        person: args.person,
+        direction: args.direction,
+        amountCents: args.amountCents,
+        date: args.date,
+        dueDate: args.dueDate ?? null,
+        note: args.note ?? "",
+        status: "open",
+      });
+      if (!normalized.ok) throw new Error(normalized.reason);
+      const rec = normalized.record;
+      if (args.id) {
+        // Editing stays inside the entry's own workspace — an entry can
+        // never be moved between workspaces by editing it.
+        const rows = await db
+          .select()
+          .from(schema.lendBorrow)
+          .where(and(eq(schema.lendBorrow.id, args.id), eq(schema.lendBorrow.ownerId, user.id)))
+          .limit(1);
+        const entry = rows[0];
+        if (!entry) throw new Error("Lend/borrow entry not found.");
+        const entryMode = asMode(entry.mode);
+        if (entryMode !== active)
+          throw new Error(`This entry belongs to the ${MODE_LABELS[entryMode]} workspace. Open that workspace to edit it — entries never move between workspaces.`);
+        await db
+          .update(schema.lendBorrow)
+          .set({
+            person: rec.person,
+            direction: rec.direction,
+            amountCents: rec.amountCents,
+            date: rec.date,
+            dueDate: rec.dueDate,
+            note: rec.note,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.lendBorrow.id, entry.id));
+        await log(db, "Lend/borrow entry updated", rec.person, user.id);
+        /* no query invalidation on Vercel — the client refetches after mutations */
+        return { id: entry.id, mode: entryMode };
+      }
+      const targetMode = args.mode ?? active;
+      await ensureWorkspace(db, user.id, targetMode);
+      const id = uid();
+      await db.insert(schema.lendBorrow).values({
+        id,
+        ownerId: user.id,
+        mode: targetMode,
+        person: rec.person,
+        direction: rec.direction,
+        amountCents: rec.amountCents,
+        date: rec.date,
+        dueDate: rec.dueDate,
+        note: rec.note,
+        status: "open",
+        settledDate: null,
+      });
+      if (targetMode === active)
+        await log(db, rec.direction === "lent" ? "Money lent" : "Money borrowed", `${rec.person} — ${MODE_LABELS[targetMode]}`, user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { id, mode: targetMode };
+    },
+  }),
+
+  settleLendBorrow: defineAction({
+    description:
+      "Marks a lend/borrow entry settled (paid back) or reopens it. Settling only closes the entry — it never creates a Money Flow transaction. Whether settling should record one linked transaction is still an open question for the owner.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      id: z.string(),
+      settled: z.boolean(),
+    }),
+    response: z.object({ id: z.string(), status: z.enum(["open", "settled"]) }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const active = await activeMode(db, user.id);
+      const rows = await db
+        .select()
+        .from(schema.lendBorrow)
+        .where(and(eq(schema.lendBorrow.id, args.id), eq(schema.lendBorrow.ownerId, user.id)))
+        .limit(1);
+      const entry = rows[0];
+      if (!entry) throw new Error("Lend/borrow entry not found.");
+      const entryMode = asMode(entry.mode);
+      if (entryMode !== active)
+        throw new Error(`This entry belongs to the ${MODE_LABELS[entryMode]} workspace. Open that workspace to change it.`);
+      const status: "open" | "settled" = args.settled ? "settled" : "open";
+      await db
+        .update(schema.lendBorrow)
+        .set({
+          status,
+          settledDate: args.settled ? todayStrIst() : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.lendBorrow.id, entry.id));
+      await log(db, args.settled ? "Lend/borrow settled" : "Lend/borrow reopened", entry.person, user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { id: entry.id, status };
+    },
+  }),
+
+  deleteLendBorrow: defineAction({
+    description:
+      "Deletes one lend/borrow entry from the active workspace. Only that entry is removed — no transaction, goal or other workspace is touched. The client asks for confirmation first and offers Undo after the delete.",
+    request: z.object({ token: z.string().max(200).optional(), id: z.string() }),
+    response: z.object({ id: z.string(), trashId: z.string().nullable() }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const active = await activeMode(db, user.id);
+      const rows = await db
+        .select()
+        .from(schema.lendBorrow)
+        .where(and(eq(schema.lendBorrow.id, args.id), eq(schema.lendBorrow.ownerId, user.id)))
+        .limit(1);
+      const entry = rows[0];
+      if (!entry) throw new Error("Lend/borrow entry not found.");
+      const entryMode = asMode(entry.mode);
+      if (entryMode !== active)
+        throw new Error(`This entry belongs to the ${MODE_LABELS[entryMode]} workspace. Open that workspace to delete it.`);
+      const trashId = await pushTrash(db, user.id, entryMode, "lend_borrow", entry.person, { row: entry });
+      await db.delete(schema.lendBorrow).where(eq(schema.lendBorrow.id, entry.id));
+      await log(db, "Lend/borrow entry deleted", entry.person, user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { id: entry.id, trashId };
     },
   }),
 
@@ -5896,6 +6114,8 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
           for (const tr of asRows(payload.transfers)) await insertIfAbsent(schema.savingsTransfers as never, tr);
           for (const sc of asRows(payload.schedules)) await insertIfAbsent(schema.savingsSchedules as never, sc);
         }
+      } else if (kind === "lend_borrow") {
+        if (await insertIfAbsent(schema.lendBorrow as never, asRow(payload.row))) restored++;
       } else if (kind === "demo_bulk") {
         for (const inv of asRows(payload.invoices)) {
           if (await insertIfAbsent(schema.invoices as never, inv)) restored++;
