@@ -145,6 +145,9 @@ const READ_ONLY_ACTIONS = new Set([
   // applyDueSavingsSchedules is NOT here: it writes deposit transfers,
   // so its success must refetch the ledger like any other mutation.
   "getSavingsSchedules",
+  // getLendBorrow is a pure read (the Lend/Borrow page lists the
+  // workspace's entries) — same reason as getSavingsSchedules.
+  "getLendBorrow",
   // suggestBudget only reads income/spending and returns a draft
   // suggestion — it writes nothing, so it must not dispatch
   // cg:mutated. Saving happens later, one saveBudget per confirmed
