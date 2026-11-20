@@ -473,10 +473,6 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
             {!active && storedTurns.length === 0 && pendingLocal.length === 0 && !ask.isPending ? (
               <div className="card px-5 py-8 text-center">
                 <p className="font-bold">Start with a suggested question, or type your own below.</p>
-                <p className="mt-1 text-sm text-[var(--dim)]">
-                  Answers include the numbers used, supporting data, options, and the
-                  assumptions behind them.
-                </p>
               </div>
             ) : null}
             {/* End-of-chat marker for the auto-scroll above. scroll-mb-36
