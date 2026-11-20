@@ -211,8 +211,8 @@ export function MoneyFlowPage({ state, notify, notifyDeleted, confirm }: PagePro
           <h1 className="display-font text-[27px] font-semibold tracking-tight">Money in &amp; out</h1>
           <p className="text-sm text-[var(--dim)]">
             {personal
-              ? "Your daily money in and out, mapped. Tap a node to see the entries inside it."
-              : "Every rupee, mapped. Tap a node to see the transactions inside it."}
+              ? "Tap a node to see the entries inside it."
+              : "Tap a node to see the entries inside it."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -289,7 +289,7 @@ export function MoneyFlowPage({ state, notify, notifyDeleted, confirm }: PagePro
       {state.transactions.length === 0 ? (
         <EmptyState
           title="Your universe is empty"
-          body="Add your first income or expense and it will appear here as a flowing node around your available cash. You can also import a CSV export from your accounting tool — columns: date, type, category, description, counterparty, amount."
+          body="Add your first income or expense, or import a CSV (date, type, category, description, counterparty, amount)."
           action={
             <button
               type="button"
