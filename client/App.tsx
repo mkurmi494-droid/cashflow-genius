@@ -115,7 +115,7 @@ function Welcome({
     },
     onSuccess: () => {
       notify(
-        `Welcome! Your ${MODE_LABELS[appMode]} workspace is ready — it starts empty, with only your own records, and stays completely separate from your other workspaces.`,
+        `Welcome! Your ${MODE_LABELS[appMode]} workspace is ready — it starts empty.`,
       );
       onDone();
     },
@@ -130,17 +130,13 @@ function Welcome({
           <GlassOrb size={130} label={<LogoMark className="h-16 w-16 text-[#7c3aed]" />} sub="The Living Ledger" />
           <h1 className="display-font mt-5 text-[26px] font-semibold tracking-tight">Welcome to Cashflow Genius</h1>
           <p className="mt-2 text-sm leading-relaxed text-[var(--dim)]">
-            A financial intelligence universe for your money: a command center, an
-            AI CFO grounded in your real numbers, forecasts, what-if simulations,
-            invoices, a profit-leak scanner, GST estimates, reports and a memory vault
-            — all calculated from one ledger.
+            Command Center, AI CFO, forecasts, invoices, budgets and more — all from one ledger.
           </p>
           <button type="button" className="btn-primary mt-6 w-full px-6 py-3 text-sm" onClick={() => setStep("setup")}>
             Create my workspace
           </button>
           <p className="mt-4 text-xs text-[var(--dim)]">
-            This workspace belongs to your account only — it starts empty, and
-            nothing in it is ever shared with another account.
+            This workspace belongs to your account only — it starts empty.
           </p>
         </div>
       </div>
@@ -165,9 +161,7 @@ function Welcome({
               : "Set up your business"}
         </h1>
         <p className="mt-1 text-sm text-[var(--dim)]">
-          First, choose how you'll use Cashflow Genius. Each mode is a completely
-          separate workspace with its own records. You can switch any time in
-          Settings — switching never moves or deletes a single record.
+          Choose how you'll use Cashflow Genius — you can switch any time in Settings.
         </p>
         <div className="mt-5">
           <ModePicker value={appMode} onChange={setAppMode} />
@@ -223,8 +217,7 @@ function Welcome({
           </div>
         </div>
         <p className="mt-4 text-xs text-[var(--dim)]">
-          Defaults: India, Indian numbering. Everything — including this mode —
-          can be changed later in Settings.
+          Defaults: India, Indian numbering. Change anything later in Settings.
         </p>
         <button type="submit" className="btn-primary mt-4 w-full px-6 py-3 text-sm" disabled={finish.isPending}>
           {finish.isPending ? "Creating…" : "Start using Cashflow Genius"}
@@ -737,9 +730,7 @@ function QuickAdd({
         <div className="mb-4 space-y-3 rounded-2xl bg-[var(--surface-soft)] p-4">
           <p className="text-sm font-bold">Say it — a draft will be made 🎤</p>
           <p className="text-xs leading-relaxed text-[var(--dim)]">
-            For example: <em>“paid 500 for chai”</em> or <em>“received 5000 from client”</em> or{" "}
-            <em>“paid 18000 rent yesterday”</em>. We pull out the amount, in/out, category and date —
-            then the draft is saved only after you check and edit it. Nothing is auto-saved.
+            Say <em>“paid 500 for chai”</em> — amount, in/out, category and date are pulled into a draft. Nothing is saved until you check it.
           </p>
           {speechSupported ? (
             <button
@@ -783,9 +774,6 @@ function QuickAdd({
           >
             Make draft from this phrase →
           </button>
-          <p className="text-[11px] leading-relaxed text-[var(--dim)]">
-            The draft is made only in this workspace ({mode === "personal" ? "Personal Money" : mode === "creator" ? "Creator & Freelancer" : "Business Money"}) — nothing goes to another workspace.
-          </p>
         </div>
       ) : null}
 
@@ -793,9 +781,7 @@ function QuickAdd({
         <div className="mb-4 space-y-3 rounded-2xl bg-[var(--surface-soft)] p-4">
           <p className="text-sm font-bold">Paste a bank / UPI message 📩</p>
           <p className="text-xs leading-relaxed text-[var(--dim)]">
-            Paste a bank SMS or UPI message here — the amount, merchant, in/out, date and UPI
-            reference will be pulled out to make a draft. <strong className="text-[var(--text)]">Nothing is auto-saved</strong> —
-            check and edit the draft first, then save.
+            Paste a bank SMS or UPI message — amount, merchant, in/out, date and UPI reference are pulled into a draft.
           </p>
           <label className="block">
             <span className="sr-only">Paste the bank or UPI message</span>
@@ -1587,7 +1573,7 @@ export function App() {
     onSuccess: (_res, m) => {
       void stateQ.refetch();
       notify(
-        `Switched to ${MODE_LABELS[m]} — a completely separate workspace with its own records. Nothing was moved, mixed or deleted.`,
+        `Switched to ${MODE_LABELS[m]}.`,
       );
     },
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
@@ -2269,7 +2255,7 @@ export function App() {
       <div className={`${collapsed ? "lg:ml-[76px]" : "lg:ml-[264px]"} no-print border-b border-[var(--border)] bg-white/70`}>
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-4 py-2">
           <span className="w-full text-[11px] font-extrabold uppercase tracking-wide text-[var(--dim)] sm:w-auto">
-            Your workspace — switch anytime, both stay saved:
+            Workspace:
           </span>
           <div className="relative" ref={wsMenuRef}>
             <button
