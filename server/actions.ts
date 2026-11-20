@@ -24,11 +24,18 @@ import {
 import {
   detectInsights,
   confidenceLabel,
+  todayStrIst,
   type GeneratedInsight,
   type InsightInput,
 } from "./lib/insights";
 import { imageReasons, normalizeImageFindings, scoreReasons } from "./lib/scamShield";
 import { RECEIPT_CATEGORIES, emptyReceipt, normalizeReceipt } from "./lib/receipts";
+import {
+  isDue,
+  isScheduleFrequency,
+  nextDueDateAfter,
+  type ScheduleFrequency,
+} from "./lib/savingsSchedules";
 
 type Db = typeof db;
 
@@ -1107,6 +1114,73 @@ function savedForGoal(transfers: SavingsTransferRow[]): number {
     (s, t) => s + (t.direction === "deposit" ? t.amountCents : -t.amountCents),
     0,
   );
+}
+
+/** Available cash in a workspace, exactly as the dashboard shows it:
+ *  opening balance + posted income − posted expenses − net saved in
+ *  pots. Used by the schedule engine so an automatic contribution is
+ *  never applied when the workspace cannot cover it. */
+async function availableCashCents(db: Db, ownerId: string, mode: AppModeT): Promise<number> {
+  const { businesses: workspaceRows } = await loadWorkspacePrelude(db, ownerId);
+  const business = workspaceRows.find((b) => asMode(b.mode) === mode);
+  const { transactions: txns, savingsTransfers } = await loadWorkspaceBatch(db, ownerId, mode);
+  const netSaved = savingsTransfers.reduce(
+    (s, tr) => s + (tr.direction === "deposit" ? tr.amountCents : -tr.amountCents),
+    0,
+  );
+  const posted = txns.filter((t) => t.status === "posted");
+  const income = posted.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCents, 0);
+  const expenses = posted.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCents, 0);
+  return (business?.openingBalanceCents ?? 0) + income - expenses - netSaved;
+}
+
+/** Applies ONE due schedule: inserts its deposit transfer and advances
+ *  (or deactivates) the schedule, inside one transaction with the row
+ *  locked FOR UPDATE — so a second concurrent applier finds the row
+ *  already advanced and applies nothing. Returns { applied: false }
+ *  with a reason when the schedule is not due, inactive, or the
+ *  available cash cannot cover it. `cashAvailable` is the caller's
+ *  running figure; the check is the only cash gate, the insert is
+ *  the single source of truth. */
+async function applyOneSchedule(
+  db: Db,
+  ownerId: string,
+  mode: AppModeT,
+  scheduleId: string,
+  cashAvailable: number,
+): Promise<{ applied: boolean; nextDueDate: string | null; reason?: string }> {
+  const today = todayStrIst();
+  return await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(schema.savingsSchedules)
+      .where(eq(schema.savingsSchedules.id, scheduleId))
+      .for("update")
+      .limit(1);
+    const row = rows[0];
+    if (!row || row.ownerId !== ownerId || row.mode !== mode)
+      return { applied: false, nextDueDate: null, reason: "Schedule not found." };
+    if (row.active !== 1) return { applied: false, nextDueDate: null };
+    if (!isDue(row.nextDueDate, today)) return { applied: false, nextDueDate: row.nextDueDate };
+    if (row.amountCents > cashAvailable)
+      return { applied: false, nextDueDate: row.nextDueDate, reason: "Not enough available cash in this workspace." };
+    await tx.insert(schema.savingsTransfers).values({
+      id: uid(),
+      goalId: row.goalId,
+      ownerId,
+      mode,
+      direction: "deposit",
+      amountCents: row.amountCents,
+      date: today,
+      note: `Scheduled ${row.frequency} savings`,
+    });
+    const next = nextDueDateAfter(row.nextDueDate, row.frequency as ScheduleFrequency);
+    await tx
+      .update(schema.savingsSchedules)
+      .set({ nextDueDate: next ?? row.nextDueDate, active: next === null ? 0 : 1, updatedAt: new Date() })
+      .where(eq(schema.savingsSchedules.id, row.id));
+    return { applied: true, nextDueDate: next };
+  });
 }
 
 /** On-track assessment for one goal, from its real dates and saved amount.
@@ -2727,9 +2801,15 @@ export const Actions = {
         .from(schema.savingsTransfers)
         .where(eq(schema.savingsTransfers.goalId, goal.id));
       const returned = savedForGoal(transfers);
-      const trashId = await pushTrash(db, user.id, wsMode, "savings_goal", goal.name, { goal, transfers });
+      // Its recurring schedules go with it — and come back on Undo.
+      const schedules = await db
+        .select()
+        .from(schema.savingsSchedules)
+        .where(eq(schema.savingsSchedules.goalId, goal.id));
+      const trashId = await pushTrash(db, user.id, wsMode, "savings_goal", goal.name, { goal, transfers, schedules });
       const statements = [
         db.delete(schema.savingsTransfers).where(eq(schema.savingsTransfers.goalId, goal.id)),
+        db.delete(schema.savingsSchedules).where(eq(schema.savingsSchedules.goalId, goal.id)),
         db.delete(schema.savingsGoals).where(eq(schema.savingsGoals.id, goal.id)),
       ];
       const [first, ...rest] = statements;
@@ -2821,6 +2901,222 @@ export const Actions = {
       await log(db, "Withdrew from savings", `${goal.name}`, user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { ok: true, transferId: id, savedCents: savedForGoal(after), error: null };
+    },
+  }),
+
+  // ---------- Recurring savings schedules ----------
+  // A schedule moves a fixed amount into a pot on its due date — once,
+  // monthly or yearly. There is no cron or background job in this app,
+  // so schedules are applied on load: the dashboard and the Savings
+  // page both call applyDueSavingsSchedules when they mount, and
+  // creating a schedule applies its first contribution immediately
+  // when its start date is today or past. Every application is a real
+  // deposit transfer (never income/expense), one per due date, and it
+  // is skipped — never forced — when the workspace's available cash
+  // cannot cover it. A schedule row is locked FOR UPDATE inside one
+  // transaction per application, so two tabs applying at the same
+  // moment cannot double-deposit (same pattern as the currency
+  // conversion guard). One application per schedule per run: a schedule
+  // that fell months behind catches up one period at a time.
+
+  getSavingsSchedules: defineAction({
+    description:
+      "Lists the recurring savings schedules for the signed-in workspace, with the goal each one feeds.",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({
+      schedules: z.array(
+        z.object({
+          id: z.string(),
+          goalId: z.string(),
+          goalName: z.string(),
+          frequency: z.enum(["once", "monthly", "yearly"]),
+          amountCents: z.number(),
+          nextDueDate: z.string(),
+          active: z.boolean(),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      try {
+        const [schedules, goals] = await Promise.all([
+          db
+            .select()
+            .from(schema.savingsSchedules)
+            .where(
+              and(
+                eq(schema.savingsSchedules.ownerId, user.id),
+                eq(schema.savingsSchedules.mode, wsMode),
+              ),
+            )
+            .orderBy(asc(schema.savingsSchedules.nextDueDate)),
+          db
+            .select()
+            .from(schema.savingsGoals)
+            .where(
+              and(
+                eq(schema.savingsGoals.ownerId, user.id),
+                eq(schema.savingsGoals.mode, wsMode),
+              ),
+            ),
+        ]);
+        const names = new Map(goals.map((g) => [g.id, g.name]));
+        return {
+          schedules: schedules.map((s) => ({
+            id: s.id,
+            goalId: s.goalId,
+            goalName: names.get(s.goalId) ?? "Deleted goal",
+            frequency: (isScheduleFrequency(s.frequency) ? s.frequency : "monthly") as ScheduleFrequency,
+            amountCents: s.amountCents,
+            nextDueDate: s.nextDueDate,
+            active: s.active === 1,
+          })),
+        };
+      } catch (e) {
+        // The code can ship before migration 0005 is applied: until the
+        // savings_schedules table exists, report an honest empty list
+        // instead of breaking the Savings page.
+        return { schedules: [] };
+      }
+    },
+  }),
+
+  createSavingsSchedule: defineAction({
+    description:
+      "Creates a recurring savings schedule for a goal: a fixed amount moves into the pot once, monthly or yearly, starting on the given date. When the start date is today or past, the first contribution is applied immediately (only if the workspace's available cash covers it); later ones are applied on load by applyDueSavingsSchedules.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      goalId: z.string(),
+      frequency: z.enum(["once", "monthly", "yearly"]),
+      amountCents: z.number().int().positive().max(100_000_000_00),
+      startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }),
+    response: z.object({
+      ok: z.boolean(),
+      scheduleId: z.string().nullable(),
+      firstApplied: z.boolean(),
+      error: z.string().nullable(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const rows = await db
+        .select()
+        .from(schema.savingsGoals)
+        .where(and(eq(schema.savingsGoals.id, args.goalId), eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)))
+        .limit(1);
+      const goal = rows[0];
+      if (!goal) return { ok: false, scheduleId: null, firstApplied: false, error: "Savings goal not found in this workspace." };
+      const id = uid();
+      await db.insert(schema.savingsSchedules).values({
+        id,
+        goalId: goal.id,
+        ownerId: user.id,
+        mode: wsMode,
+        frequency: args.frequency,
+        amountCents: args.amountCents,
+        nextDueDate: args.startDate,
+        active: 1,
+      });
+      await log(db, "Savings schedule created", `${goal.name} — ${args.frequency}`, user.id);
+      // First contribution now when its start date has already arrived.
+      let firstApplied = false;
+      if (isDue(args.startDate, todayStrIst())) {
+        const cash = await availableCashCents(db, user.id, wsMode);
+        const res = await applyOneSchedule(db, user.id, wsMode, id, cash);
+        firstApplied = res.applied;
+      }
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true, scheduleId: id, firstApplied, error: null };
+    },
+  }),
+
+  cancelSavingsSchedule: defineAction({
+    description:
+      "Cancels a recurring savings schedule. No more contributions are applied; money already moved into the pot stays there.",
+    request: z.object({ token: z.string().max(200).optional(), id: z.string() }),
+    response: z.object({ ok: z.boolean(), error: z.string().nullable() }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const rows = await db
+        .select()
+        .from(schema.savingsSchedules)
+        .where(and(eq(schema.savingsSchedules.id, args.id), eq(schema.savingsSchedules.ownerId, user.id), eq(schema.savingsSchedules.mode, wsMode)))
+        .limit(1);
+      if (!rows[0]) return { ok: false, error: "Savings schedule not found in this workspace." };
+      await db
+        .update(schema.savingsSchedules)
+        .set({ active: 0, updatedAt: new Date() })
+        .where(eq(schema.savingsSchedules.id, args.id));
+      await log(db, "Savings schedule cancelled", rows[0].goalId, user.id);
+      /* no query invalidation on Vercel — the client refetches after mutations */
+      return { ok: true, error: null };
+    },
+  }),
+
+  applyDueSavingsSchedules: defineAction({
+    description:
+      "Applies every due recurring savings schedule in the signed-in workspace: one deposit transfer per due schedule, advancing its next due date (a one-time schedule deactivates after applying). Schedules whose amount the workspace's available cash cannot cover are skipped and reported, never forced.",
+    request: z.object({ token: z.string().max(200).optional() }),
+    response: z.object({
+      applied: z.array(z.object({ scheduleId: z.string(), goalId: z.string(), goalName: z.string(), amountCents: z.number(), nextDueDate: z.string().nullable() })),
+      skipped: z.array(z.object({ scheduleId: z.string(), goalId: z.string(), goalName: z.string(), amountCents: z.number(), reason: z.string() })),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      try {
+        const cash = await availableCashCents(db, user.id, wsMode);
+        const goals = await db
+          .select()
+          .from(schema.savingsGoals)
+          .where(and(eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)));
+        const names = new Map(goals.map((g) => [g.id, g.name]));
+        const due = await db
+          .select()
+          .from(schema.savingsSchedules)
+          .where(
+            and(
+              eq(schema.savingsSchedules.ownerId, user.id),
+              eq(schema.savingsSchedules.mode, wsMode),
+              eq(schema.savingsSchedules.active, 1),
+            ),
+          )
+          .orderBy(asc(schema.savingsSchedules.nextDueDate));
+        const today = todayStrIst();
+        const applied: { scheduleId: string; goalId: string; goalName: string; amountCents: number; nextDueDate: string | null }[] = [];
+        const skipped: { scheduleId: string; goalId: string; goalName: string; amountCents: number; reason: string }[] = [];
+        let runningCash = cash;
+        for (const sch of due) {
+          if (!isDue(sch.nextDueDate, today)) continue;
+          const goalName = names.get(sch.goalId);
+          if (!goalName) {
+            // The goal was deleted: retire the orphaned schedule.
+            await db
+              .update(schema.savingsSchedules)
+              .set({ active: 0, updatedAt: new Date() })
+              .where(eq(schema.savingsSchedules.id, sch.id));
+            continue;
+          }
+          const res = await applyOneSchedule(db, user.id, wsMode, sch.id, runningCash);
+          if (res.applied) {
+            runningCash -= sch.amountCents;
+            applied.push({ scheduleId: sch.id, goalId: sch.goalId, goalName, amountCents: sch.amountCents, nextDueDate: res.nextDueDate });
+          } else if (res.reason) {
+            skipped.push({ scheduleId: sch.id, goalId: sch.goalId, goalName, amountCents: sch.amountCents, reason: res.reason });
+          }
+        }
+        return { applied, skipped };
+      } catch (e) {
+        // Migration 0005 not applied yet: no schedules can exist.
+        return { applied: [], skipped: [] };
+      }
     },
   }),
 
@@ -5357,6 +5653,7 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         if (await insertIfAbsent(schema.savingsGoals as never, asRow(payload.goal))) {
           restored++;
           for (const tr of asRows(payload.transfers)) await insertIfAbsent(schema.savingsTransfers as never, tr);
+          for (const sc of asRows(payload.schedules)) await insertIfAbsent(schema.savingsSchedules as never, sc);
         }
       } else if (kind === "demo_bulk") {
         for (const inv of asRows(payload.invoices)) {
