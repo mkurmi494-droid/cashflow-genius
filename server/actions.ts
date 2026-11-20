@@ -6416,12 +6416,12 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         reply: z.string(),
         question: z.string().nullish(),
         // Loose on purpose: the model often omits plan fields that
-        // have no value (counterparty, note, dueDate). The strict
-        // check is normalizeHomeChatPlan below, which fills the
-        // defaults or rejects with a reason. A strict plan shape here
-        // used to fail the whole parse whenever one field was missing
-        // (live, 2026-11-20) and the fallback then returned null.
-        plan: z.object({ kind: z.string() }).passthrough().nullish(),
+        // have no value (counterparty, note, dueDate) and sometimes
+        // nests the plan under its kind key
+        // (plan: {"add_transaction": {...}} — live, 2026-11-20). The
+        // strict check is normalizeHomeChatPlan below, which unwraps
+        // the nesting, fills the defaults or rejects with a reason.
+        plan: z.record(z.string(), z.unknown()).nullish(),
       });
       let raw: z.infer<typeof replySchema>;
       try {
@@ -6449,7 +6449,7 @@ Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action
 - "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
 - "confirm": the request is a delete or a currency change, OR you are unsure about an amount, a date, a category, a goal name or which record is meant. Put your best-guess plan in "plan" and what you are unsure about in "question".
 - "clarify": something essential is missing (no amount, no date, no name, no goal). Put the question in "question" and no plan.
-Plan shapes (exact keys, no others):
+Plan shapes (exact keys, no others). IMPORTANT: "plan" IS the plan object itself — {"kind":"add_transaction",...}. NEVER wrap it in a key named after its kind (no {"add_transaction": {...}}).
 - add_transaction: {"kind":"add_transaction","type":"income"|"expense","amountCents":number,"category":"...","description":"...","counterparty":"...","date":"yyyy-mm-dd"}
 - add_budget: {"kind":"add_budget","category":"...","monthlyLimitCents":number}
 - add_savings_goal: {"kind":"add_savings_goal","name":"...","targetCents":number,"targetDate":"yyyy-mm-dd"}
