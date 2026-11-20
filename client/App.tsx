@@ -28,6 +28,7 @@ import { LendBorrowPage } from "./pageLend";
 import { MoneyToolsPage } from "./pageTools";
 import { CalculatorPanel } from "./calculator";
 import { HomeChatFab } from "./homeChat";
+import { AppUpdateBanner } from "./appUpdate";
 import { ConfirmDialog, UndoToast, useSafety } from "./safety";
 import { applyCursorStyle, DEFAULT_CURSOR_STYLE } from "./cursor";
 import { ScamShieldPage } from "./pageShield";
@@ -2334,6 +2335,7 @@ export function App() {
       {/* Main */}
       <main className={`px-4 pb-28 pt-5 sm:pt-7 lg:pb-12 ${collapsed ? "lg:ml-[76px]" : "lg:ml-[264px]"}`}>
         <div className="mx-auto max-w-6xl">
+          <AppUpdateBanner />
           <MainContent key={route} route={route} pageProps={pageProps} />
         </div>
       </main>
