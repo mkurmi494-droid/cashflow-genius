@@ -456,6 +456,26 @@ export const savingsGoals = pgTable("savings_goals", {
     .defaultNow(),
 });
 
+export const savingsSchedules = pgTable("savings_schedules", {
+  id: text("id").primaryKey(),
+  goalId: text("goal_id").notNull(),
+  ownerId: text("owner_id").notNull().default("legacy"),
+  mode: text("mode").notNull().default("business"), // workspace this schedule belongs to
+  // once = a single dated contribution; monthly / yearly = repeats.
+  frequency: text("frequency", { enum: ["once", "monthly", "yearly"] })
+    .notNull()
+    .default("monthly"),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // always positive
+  nextDueDate: text("next_due_date").notNull(), // yyyy-mm-dd (IST)
+  active: integer("active").notNull().default(1), // 1 = live, 0 = done/cancelled
+  createdAt: timestamp("created_at", { mode: "date" })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date" })
+    .notNull()
+    .defaultNow(),
+});
+
 export const savingsTransfers = pgTable("savings_transfers", {
   id: text("id").primaryKey(),
   goalId: text("goal_id").notNull(),
