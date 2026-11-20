@@ -43,6 +43,13 @@
       "when": 1795060000000,
       "tag": "0005_savings_schedules",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795163753772,
+      "tag": "0006_lend_borrow",
+      "breakpoints": true
     }
   ]
 }
