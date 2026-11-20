@@ -217,14 +217,11 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
-  // Escape closes the sheet, and the header stays pinned while the
-  // content scrolls — on a phone the list can be taller than the
-  // screen, and the close button must never scroll out of reach.
-  // Two mechanisms keep it pinned: the header has NO negative
-  // margins (they broke sticking), and the cg-modal-in keyframe ends
-  // opacity-only so no transform survives on the sheet (a persisted
-  // transform defeated the stick — the currency picker's × kept
-  // scrolling away until this was fixed, live-found 2026-11-20).
+  // Escape closes the sheet. The header sits ABOVE the scrolling
+  // body (a plain flex child, not sticky) — on a phone the list can
+  // be taller than the screen, and the close button must never
+  // scroll out of reach. See the layout comment on the sheet below
+  // for why sticky was abandoned (two live failures, 2026-11-20).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -240,13 +237,22 @@ export function Modal({
       aria-label={title}
       onClick={onClose}
     >
+      {/* The header is a normal flex child ABOVE the scrolling body —
+       *  it never scrolls, so the × can never scroll away. Two earlier
+       *  attempts used position:sticky on the header and both failed
+       *  live (2026-11-20): first the persisted cg-modal-in transform
+       *  defeated the stick, then — even with the transform removed —
+       *  the header still scrolled away with the list. This layout
+       *  has no sticky positioning at all, so nothing can defeat it.
+       *  The body is the only scrolling part (min-h-0 lets it shrink
+       *  inside the flex column). */}
       <div
-        className={`glass rise max-h-[92vh] w-full overflow-y-auto rounded-t-3xl sm:rounded-3xl ${
+        className={`glass rise flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl ${
           wide ? "sm:max-w-2xl" : "sm:max-w-lg"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-3xl bg-[var(--surface)] px-5 pb-3 pt-5">
+        <div className="flex shrink-0 items-center justify-between gap-3 bg-[var(--surface)] px-5 py-4">
           <h3 className="text-lg font-extrabold">{title}</h3>
           <button
             type="button"
@@ -257,7 +263,7 @@ export function Modal({
             ×
           </button>
         </div>
-        <div className="px-5 pb-5 pt-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4">{children}</div>
       </div>
     </div>
   );
