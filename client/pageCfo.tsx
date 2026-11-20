@@ -5,6 +5,7 @@ import { buildTurns, displayRawText } from "./cfoHistory";
 import { addDays, buildCalendarEvents, fmtMoney, prettyDate, summarise, todayStr, totalSavedCents } from "./lib";
 import type { PageProps } from "./types";
 import { Badge, GlassOrb, SectionTitle } from "./components";
+import { LoadingMark } from "./LoadingMark";
 
 type CfoAnswer = ApiResponse<typeof api, "askCfo">["answer"];
 type CfoLang = "en" | "hinglish";
@@ -460,10 +461,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
             {pendingLocal.map((t, i) => answerCard(t.a, t.q, 1000 + i))}
             {ask.isPending ? (
               <div className="card flex items-center gap-3 p-4" role="status">
-                <span
-                  aria-hidden
-                  className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--accent-bright)] border-t-transparent"
-                />
+                <LoadingMark inline className="h-6 w-6" />
                 <p className="text-sm font-semibold">
                   The AI CFO is reading your calculated figures…
                 </p>
