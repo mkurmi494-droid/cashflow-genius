@@ -494,10 +494,32 @@ const TIMEZONES = [
   "UTC",
 ];
 
+type SettingsSectionId =
+  | "mode"
+  | "cursor"
+  | "account"
+  | "backup"
+  | "categories"
+  | "delete"
+  | "profile"
+  | "tour"
+  | "activity";
+
 export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShowTour, currencyBusy }: PageProps) {
   const b = state.business;
   const appMode = modeOf(state);
   const personal = isPersonalLike(appMode);
+  const SETTINGS_SECTIONS: { id: SettingsSectionId; icon: string; title: string; desc: string }[] = [
+    { id: "mode", icon: "⇄", title: "Money mode", desc: "Personal, Business or Creator — switch workspaces." },
+    { id: "cursor", icon: "↖", title: "Cursor style", desc: "Your desktop cursor, saved to your account." },
+    { id: "account", icon: "👤", title: "Your account", desc: "Sign-in, log out and change your login." },
+    { id: "backup", icon: "⤓", title: "Backup, restore & undo", desc: "Full backup of every workspace." },
+    { id: "categories", icon: "✎", title: "Custom categories", desc: "Rename or remove your own categories." },
+    { id: "delete", icon: "🗑", title: "Delete account", desc: "Delete your account and everything in it." },
+    { id: "profile", icon: "🏢", title: personal ? "Your profile" : "Business profile", desc: "Name, currency, opening balance and more." },
+    { id: "tour", icon: "🧭", title: "App tour & help", desc: "A guided walkthrough of the app." },
+    { id: "activity", icon: "🕐", title: "Recent activity", desc: "What changed in your account lately." },
+  ];
   const [name, setName] = useState(b.name);
   const [industry, setIndustry] = useState(b.industry);
   const [country, setCountry] = useState(b.country);
@@ -507,6 +529,9 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
   const [ownerName, setOwnerName] = useState(b.ownerName);
   const [ownerEmail, setOwnerEmail] = useState(b.ownerEmail);
   const [ownerPhone, setOwnerPhone] = useState(b.ownerPhone);
+  // Hub + detail: the hub lists every section as a card; tapping one
+  // opens only that section, with a back button to the hub.
+  const [openSection, setOpenSection] = useState<SettingsSectionId | null>(null);
 
   const save = useMutation({
     mutationFn: () =>
@@ -722,417 +747,466 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
 
   return (
     <div className="page-anim space-y-6">
-      <div>
-        <h1 className="display-font text-[27px] font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-[var(--dim)]">
-          {personal
-            ? "Your mode, profile, preferences and how this workspace is wired."
-            : "Your mode, business profile, preferences and how this workspace is wired."}
-        </p>
-      </div>
-
-      <section className="card p-5" aria-label="How you use Cashflow Genius">
-        <SectionTitle
-          title="How you use Cashflow Genius"
-          hint={`Currently: ${MODE_LABELS[appMode]}`}
-        />
-        <ModePicker
-          value={appMode}
-          onChange={(m) => {
-            void askSwitchMode(m);
-          }}
-        />
-        <p className="mt-3 text-sm leading-relaxed text-[var(--dim)]" role="status">
-          {switchMode.isPending
-            ? "Switching workspace…"
-            : "Each mode is a separate workspace — switching never moves, merges or deletes anything."}
-        </p>
-        {state.workspaces.length > 1 ? (
-          <ul className="mt-3 space-y-1.5" aria-label="Your workspaces">
-            {state.workspaces.map((w) => {
-              const wm = w.mode as AppMode;
-              return (
-              <li key={w.mode} className="flex items-center justify-between rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-xs">
-                <span className="font-bold">
-                  {MODE_ICONS[wm]} {MODE_LABELS[wm]}
-                  <span className="ml-2 font-semibold text-[var(--dim)]">{w.name || "Unnamed space"}</span>
-                </span>
-                {w.mode === appMode ? (
-                  <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-bold text-white">OPEN NOW</span>
-                ) : null}
-              </li>
-              );
-            })}
-          </ul>
-        ) : null}
-      </section>
-
-      <section className="card p-5" aria-label="Cursor style">
-        <SectionTitle
-          title="Cursor style"
-          hint={`Currently: ${cursorLabel(cursorChoice)} · saved to your account`}
-        />
-        {finePointer ? (
-          <>
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Choose your cursor style">
-              {CURSOR_OPTIONS.map((opt) => {
-                const selected = cursorChoice === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={saveCursor.isPending}
-                    onClick={() => pickCursor(opt.id)}
-                    className={`flex items-start gap-3 rounded-2xl border-[1.5px] px-3.5 py-3 text-left transition ${
-                      selected
-                        ? "border-[var(--accent-bright)] bg-[var(--surface-soft)] shadow-[0_0_0_3px_rgba(217,70,239,0.15)]"
-                        : "border-[var(--border)] bg-white hover:bg-[var(--surface-soft)]"
-                    }`}
-                  >
-                    <span
-                      aria-hidden
-                      className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] shadow-[0_4px_10px_rgba(76,29,149,0.18)]"
-                      style={{ background: opt.swatch }}
-                    >
-                      {opt.id === "minimal" ? (
-                        <span className="block h-4 w-4 rounded-full border-[1.5px] border-[#241b3a]/60" />
-                      ) : opt.id === "off" ? (
-                        <span className="text-[13px] leading-none text-[var(--dim)]">↖</span>
-                      ) : null}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2 text-sm font-extrabold text-[var(--text)]">
-                        {opt.label}
-                        {selected ? (
-                          <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-bold text-white">
-                            ON
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="mt-0.5 block text-xs leading-relaxed text-[var(--dim)]">
-                        {opt.description}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]" role="status">
-              {saveCursor.isPending
-                ? "Saving your choice to your account…"
-                : "Cursors show on desktop with a mouse or trackpad."}
-            </p>
-          </>
-        ) : (
-          <div className="rounded-2xl bg-[var(--surface-soft)] px-4 py-3">
-            <p className="text-sm leading-relaxed text-[var(--dim)]">
-              Custom cursors need a mouse or trackpad, so there is nothing to change on this touch device. Your saved choice is{" "}
-              <strong className="text-[var(--text)]">{cursorLabel(cursorChoice)}</strong>.
-            </p>
-          </div>
-        )}
-      </section>
-
-      <section className="card p-5" aria-label="Your account">
-        <SectionTitle title="Your account" />
-        <p className="text-sm text-[var(--dim)]">
-          Signed in as{" "}
-          <strong className="text-[var(--text)]">{state.authUser.identifier}</strong>{" "}
-          ({state.authUser.channel === "phone" ? "mobile number" : "email address"})
-          {" · "}
-          {state.authUser.verified ? (
-            <span className="font-bold text-[var(--accent)]">Verified ✓</span>
-          ) : (
-            <span className="font-bold text-[var(--warn-text)]">Not verified</span>
-          )}
-        </p>
-        <button type="button" className="btn-ghost mt-3 px-5 py-2.5 text-sm" onClick={() => void doLogout()}>
-          ⎋ Log out
-        </button>
-        <form
-            className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const ok = await confirm({
-                title: "Change your login?",
-                body: "From now on you will sign in with the new email address. Your records, workspaces and password stay exactly the same.",
-                detail: `New login: ${newIdentifier.trim()}`,
-                confirmLabel: "Change login",
-              });
-              if (ok) changeId.mutate();
-            }}
-          >
-            <Field label="New email address">
-              <input className="field" type="email" value={newIdentifier} onChange={(e) => setNewIdentifier(e.target.value)} aria-label="New email address" placeholder="you@example.com" autoComplete="off" />
-            </Field>
-            <Field label="Current password (to confirm it's you)">
-              <input className="field" type="password" value={idPassword} onChange={(e) => setIdPassword(e.target.value)} aria-label="Current password for changing login" autoComplete="current-password" />
-            </Field>
-            <div className="flex items-end">
-              <button type="submit" className="btn-ghost w-full px-5 py-2.5 text-sm" disabled={changeId.isPending || !newIdentifier.trim() || !idPassword}>
-                {changeId.isPending ? "Updating…" : "Change login"}
-              </button>
-            </div>
-          </form>
-      </section>
-
-      <section className="card p-5" aria-label="Backup, restore and undo">
-        <SectionTitle
-          title="Backup, restore & undo"
-          hint="Full JSON backup of every workspace."
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" className="btn-primary px-5 py-2.5 text-sm" disabled={exportBackup.isPending} onClick={() => exportBackup.mutate()}>
-            {exportBackup.isPending ? "Preparing…" : "Download full backup"}
-          </button>
-          <button type="button" className="btn-ghost px-5 py-2.5 text-sm" onClick={() => backupFileRef.current?.click()}>
-            Restore from backup file…
-          </button>
-          <input
-            ref={backupFileRef}
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            aria-label="Choose a Cashflow Genius backup file to restore"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (!f) return;
-              try {
-                const parsed: unknown = JSON.parse(await f.text());
-                if (
-                  typeof parsed !== "object" || parsed === null ||
-                  !Array.isArray((parsed as { workspaces?: unknown }).workspaces)
-                ) {
-                  setRestoreMsg("That file doesn't look like a Cashflow Genius backup (no workspaces list found). Nothing was restored.");
-                  return;
-                }
-                const wsCount = (parsed as { workspaces: unknown[] }).workspaces.length;
-                const ok = await confirm({
-                  title: "Restore this backup?",
-                  body: "Records from the backup file will be merged into your account. Records that are already here are skipped — nothing is overwritten or deleted, and each record returns to its own workspace.",
-                  detail: `File: ${f.name} · ${wsCount} workspace(s) in the file`,
-                  confirmLabel: "Restore backup",
-                });
-                if (ok) restoreBackup.mutate(parsed);
-              } catch {
-                setRestoreMsg("That file could not be read as a backup. Nothing was restored.");
-              }
-            }}
-          />
-          <button type="button" className="btn-ghost px-5 py-2.5 text-sm" disabled={undoImport.isPending} onClick={() => void askUndoImport()}>
-            Undo last CSV import (this workspace)
-          </button>
-        </div>
-        {restoreMsg ? (
-          <p className="mt-3 rounded-xl bg-[var(--ai)] px-3 py-2 text-sm text-[var(--ai-text)]" role="status">{restoreMsg}</p>
-        ) : null}
-        <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]">
-          {lastImport
-            ? `Last CSV import in this workspace: ${lastImport.detail} — ${new Date(lastImport.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`
-            : "No CSV import has been recorded in this workspace yet."}
-        </p>
-      </section>
-
-      <section className="card p-5" aria-label="Your custom categories in this workspace">
-        <SectionTitle
-          title="Your custom categories"
-          hint={`Remembered in ${MODE_LABELS[appMode]} only — rename or remove them here`}
-        />
-        {(state.customCategories ?? []).length === 0 ? (
-          <p className="text-sm text-[var(--dim)]">
-            None yet — pick “✎ Custom” in any category dropdown to add one.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {(state.customCategories ?? []).map((c) => {
-              const draft = renameDraft[c.id] ?? c.name;
-              const dir = c.type === "income" ? ("income" as const) : ("expense" as const);
-              return (
-                <li key={c.id} className="flex flex-wrap items-center gap-2 rounded-2xl bg-[var(--surface-soft)] px-3 py-2">
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-[var(--dim)]">
-                    {c.type}
-                  </span>
-                  <label className="min-w-0 flex-1">
-                    <span className="sr-only">Rename custom category {c.name}</span>
-                    <input
-                      className="field !py-1.5 text-sm font-bold"
-                      value={draft}
-                      maxLength={60}
-                      onChange={(e) => setRenameDraft((d) => ({ ...d, [c.id]: e.target.value }))}
-                      aria-label={`Rename custom category ${c.name}`}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="btn-ghost px-3 py-1.5 text-xs"
-                    disabled={renameCat.isPending || draft.trim() === c.name || !draft.trim()}
-                    onClick={() => renameCat.mutate({ type: dir, oldName: c.name, newName: draft.trim() })}
-                  >
-                    Rename everywhere
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-ghost px-3 py-1.5 text-xs text-[var(--err-text)]"
-                    disabled={deleteCat.isPending}
-                    onClick={() => void askDeleteCat({ type: dir, name: c.name })}
-                    aria-label={`Remove custom category ${c.name} from the list`}
-                  >
-                    Remove
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section className="card border-[#e3b3ae] p-5" aria-label="Delete account permanently">
-          <SectionTitle title="Delete account permanently" />
-          <p className="text-sm leading-relaxed text-[var(--dim)]">
-            This deletes your account and <strong className="text-[var(--text)]">every record in every workspace</strong> —
-            transactions, invoices, notes, budgets, everything — and it cannot be undone.
-            Download a full backup above first if you might want the data again.
-          </p>
-          <form
-            className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const ok = await confirm({
-                title: "Delete your account forever?",
-                body: "This is permanent and cannot be undone — there is no Undo for account deletion. Your account and every record in every workspace (Personal, Business, Creator) will be deleted.",
-                detail: "If you might want this data again, cancel now and download a full backup first (Backup, restore & undo, above).",
-                confirmLabel: "Yes, delete forever",
-                cancelLabel: "Keep my account",
-                danger: true,
-              });
-              if (ok) deleteAcct.mutate();
-            }}
-          >
-            <Field label="Your password">
-              <input className="field" type="password" value={delPassword} onChange={(e) => setDelPassword(e.target.value)} aria-label="Password for account deletion" autoComplete="current-password" />
-            </Field>
-            <Field label="Type DELETE to confirm">
-              <input className="field" value={delConfirm} onChange={(e) => setDelConfirm(e.target.value)} aria-label="Type DELETE to confirm account deletion" autoComplete="off" />
-            </Field>
-            <div className="flex items-end">
-              <button
-                type="submit"
-                className="btn-danger w-full px-5 py-2.5 text-sm disabled:opacity-50"
-                disabled={deleteAcct.isPending || !delPassword || delConfirm.trim() !== "DELETE"}
-              >
-                {deleteAcct.isPending ? "Deleting…" : "Delete my account forever"}
-              </button>
-            </div>
-          </form>
-        </section>
-
-      <section className="card p-5" aria-label="Business profile">
-        <SectionTitle title={personal ? "Your profile" : "Business profile"} />
-        <form
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-          onSubmit={(e) => void submitProfile(e)}
-        >
-          <Field label={personal ? "Name for this space" : "Business name"}>
-            <input className="field" value={name} onChange={(e) => setName(e.target.value)} aria-label="Business name" placeholder={personal ? "e.g. My Daily Spending" : "e.g. Sarya Design Studio"} />
-          </Field>
-          {personal ? null : (
-            <Field label="Industry">
-              <input className="field" value={industry} onChange={(e) => setIndustry(e.target.value)} aria-label="Industry" placeholder="e.g. Design services" />
-            </Field>
-          )}
-          <Field label="Your name">
-            <input className="field" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} aria-label="Your name" />
-          </Field>
-          <Field label="Your email">
-            <input className="field" type="email" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} aria-label="Your email" />
-          </Field>
-          <Field label="Mobile number (optional — profile only)">
-            <input className="field" type="tel" value={ownerPhone} onChange={(e) => setOwnerPhone(e.target.value)} aria-label="Mobile number, optional profile detail" placeholder="+91 …" autoComplete="tel" />
-            <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-              Profile only — never used to sign in, no OTP or SMS is ever sent to it.
-            </p>
-          </Field>
-          <Field label="Country">
-            <input className="field" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country" />
-          </Field>
-          <Field label="Currency">
-            <CurrencyPicker
-              value={currency}
-              onChange={setCurrency}
-              disabled={save.isPending || currencyBusy === true}
-            />
-            {convertingNow ? (
-              <p className="mt-1 text-xs font-bold text-[var(--accent)]" role="status">
-                Converting amounts to {currency}…
-              </p>
-            ) : null}
-          </Field>
-          <Field label={personal ? "Money you started with" : "Opening cash balance"}>
-            <input className="field" type="number" step="1" value={opening} onChange={(e) => setOpening(e.target.value)} aria-label="Opening cash balance" />
-          </Field>
-          <Field label="Preferred timezone">
-            <select className="field" value={timezone} onChange={(e) => setTimezone(e.target.value)} aria-label="Preferred timezone">
-              {TIMEZONES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          </Field>
-          <div className="sm:col-span-2">
+      {openSection ? (
+        <>
+          <div>
             <button
-              type="submit"
-              className="btn-primary px-6 py-2.5 text-sm"
-              disabled={save.isPending || currencyBusy === true}
+              type="button"
+              className="btn-ghost px-4 py-2 text-sm"
+              onClick={() => setOpenSection(null)}
             >
-              {save.isPending ? "Saving…" : currencyBusy === true ? "Converting…" : "Save profile"}
+              ← Settings
             </button>
           </div>
-        </form>
-        <p className="mt-3 text-xs text-[var(--dim)]">
-          Cash balance = opening balance + posted income − posted expenses; unpaid invoices never count as cash.
-        </p>
-      </section>
-
-      <section className="card p-5" aria-label="App tour and help">
-        <SectionTitle
-          title="App tour & help"
-          hint="The guided walkthrough of everything Cashflow Genius can do"
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-primary px-5 py-2.5 text-sm"
-            onClick={onShowTour}
-            disabled={!onShowTour}
-            aria-label="Start the guided app tour"
-          >
-            🧭 Start the app tour
-          </button>
-        </div>
-      </section>
-
-      <section className="card p-5" aria-label="Recent activity">
-        <SectionTitle title="Recent activity" />
-        {state.activity.length === 0 ? (
-          <p className="text-sm text-[var(--dim)]">No activity recorded yet.</p>
-        ) : (
-          <ul className="divide-y divide-[var(--border)]">
-            {state.activity.map((a) => (
-              <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span>
-                  <strong>{a.action}</strong>
-                  {a.detail ? <span className="text-[var(--dim)]"> — {a.detail}</span> : null}
+          {openSection === "mode" && (
+            <section className="card p-5" aria-label="How you use Cashflow Genius">
+              <SectionTitle
+                title="How you use Cashflow Genius"
+                hint={`Currently: ${MODE_LABELS[appMode]}`}
+              />
+              <ModePicker
+                value={appMode}
+                onChange={(m) => {
+                  void askSwitchMode(m);
+                }}
+              />
+              <p className="mt-3 text-sm leading-relaxed text-[var(--dim)]" role="status">
+                {switchMode.isPending
+                  ? "Switching workspace…"
+                  : "Each mode is a separate workspace — switching never moves, merges or deletes anything."}
+              </p>
+              {state.workspaces.length > 1 ? (
+                <ul className="mt-3 space-y-1.5" aria-label="Your workspaces">
+                  {state.workspaces.map((w) => {
+                    const wm = w.mode as AppMode;
+                    return (
+                    <li key={w.mode} className="flex items-center justify-between rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-xs">
+                      <span className="font-bold">
+                        {MODE_ICONS[wm]} {MODE_LABELS[wm]}
+                        <span className="ml-2 font-semibold text-[var(--dim)]">{w.name || "Unnamed space"}</span>
+                      </span>
+                      {w.mode === appMode ? (
+                        <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-bold text-white">OPEN NOW</span>
+                      ) : null}
+                    </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </section>
+          )}
+          {openSection === "cursor" && (
+            <section className="card p-5" aria-label="Cursor style">
+              <SectionTitle
+                title="Cursor style"
+                hint={`Currently: ${cursorLabel(cursorChoice)} · saved to your account`}
+              />
+              {finePointer ? (
+                <>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Choose your cursor style">
+                    {CURSOR_OPTIONS.map((opt) => {
+                      const selected = cursorChoice === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={saveCursor.isPending}
+                          onClick={() => pickCursor(opt.id)}
+                          className={`flex items-start gap-3 rounded-2xl border-[1.5px] px-3.5 py-3 text-left transition ${
+                            selected
+                              ? "border-[var(--accent-bright)] bg-[var(--surface-soft)] shadow-[0_0_0_3px_rgba(217,70,239,0.15)]"
+                              : "border-[var(--border)] bg-white hover:bg-[var(--surface-soft)]"
+                          }`}
+                        >
+                          <span
+                            aria-hidden
+                            className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] shadow-[0_4px_10px_rgba(76,29,149,0.18)]"
+                            style={{ background: opt.swatch }}
+                          >
+                            {opt.id === "minimal" ? (
+                              <span className="block h-4 w-4 rounded-full border-[1.5px] border-[#241b3a]/60" />
+                            ) : opt.id === "off" ? (
+                              <span className="text-[13px] leading-none text-[var(--dim)]">↖</span>
+                            ) : null}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2 text-sm font-extrabold text-[var(--text)]">
+                              {opt.label}
+                              {selected ? (
+                                <span className="rounded-full bg-[var(--accent)] px-2 py-0.5 text-[10px] font-bold text-white">
+                                  ON
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="mt-0.5 block text-xs leading-relaxed text-[var(--dim)]">
+                              {opt.description}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]" role="status">
+                    {saveCursor.isPending
+                      ? "Saving your choice to your account…"
+                      : "Cursors show on desktop with a mouse or trackpad."}
+                  </p>
+                </>
+              ) : (
+                <div className="rounded-2xl bg-[var(--surface-soft)] px-4 py-3">
+                  <p className="text-sm leading-relaxed text-[var(--dim)]">
+                    Custom cursors need a mouse or trackpad, so there is nothing to change on this touch device. Your saved choice is{" "}
+                    <strong className="text-[var(--text)]">{cursorLabel(cursorChoice)}</strong>.
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
+          {openSection === "account" && (
+            <section className="card p-5" aria-label="Your account">
+              <SectionTitle title="Your account" />
+              <p className="text-sm text-[var(--dim)]">
+                Signed in as{" "}
+                <strong className="text-[var(--text)]">{state.authUser.identifier}</strong>{" "}
+                ({state.authUser.channel === "phone" ? "mobile number" : "email address"})
+                {" · "}
+                {state.authUser.verified ? (
+                  <span className="font-bold text-[var(--accent)]">Verified ✓</span>
+                ) : (
+                  <span className="font-bold text-[var(--warn-text)]">Not verified</span>
+                )}
+              </p>
+              <button type="button" className="btn-ghost mt-3 px-5 py-2.5 text-sm" onClick={() => void doLogout()}>
+                ⎋ Log out
+              </button>
+              <form
+                  className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const ok = await confirm({
+                      title: "Change your login?",
+                      body: "From now on you will sign in with the new email address. Your records, workspaces and password stay exactly the same.",
+                      detail: `New login: ${newIdentifier.trim()}`,
+                      confirmLabel: "Change login",
+                    });
+                    if (ok) changeId.mutate();
+                  }}
+                >
+                  <Field label="New email address">
+                    <input className="field" type="email" value={newIdentifier} onChange={(e) => setNewIdentifier(e.target.value)} aria-label="New email address" placeholder="you@example.com" autoComplete="off" />
+                  </Field>
+                  <Field label="Current password (to confirm it's you)">
+                    <input className="field" type="password" value={idPassword} onChange={(e) => setIdPassword(e.target.value)} aria-label="Current password for changing login" autoComplete="current-password" />
+                  </Field>
+                  <div className="flex items-end">
+                    <button type="submit" className="btn-ghost w-full px-5 py-2.5 text-sm" disabled={changeId.isPending || !newIdentifier.trim() || !idPassword}>
+                      {changeId.isPending ? "Updating…" : "Change login"}
+                    </button>
+                  </div>
+                </form>
+            </section>
+          )}
+          {openSection === "backup" && (
+            <section className="card p-5" aria-label="Backup, restore and undo">
+              <SectionTitle
+                title="Backup, restore & undo"
+                hint="Full JSON backup of every workspace."
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" className="btn-primary px-5 py-2.5 text-sm" disabled={exportBackup.isPending} onClick={() => exportBackup.mutate()}>
+                  {exportBackup.isPending ? "Preparing…" : "Download full backup"}
+                </button>
+                <button type="button" className="btn-ghost px-5 py-2.5 text-sm" onClick={() => backupFileRef.current?.click()}>
+                  Restore from backup file…
+                </button>
+                <input
+                  ref={backupFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  aria-label="Choose a Cashflow Genius backup file to restore"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    try {
+                      const parsed: unknown = JSON.parse(await f.text());
+                      if (
+                        typeof parsed !== "object" || parsed === null ||
+                        !Array.isArray((parsed as { workspaces?: unknown }).workspaces)
+                      ) {
+                        setRestoreMsg("That file doesn't look like a Cashflow Genius backup (no workspaces list found). Nothing was restored.");
+                        return;
+                      }
+                      const wsCount = (parsed as { workspaces: unknown[] }).workspaces.length;
+                      const ok = await confirm({
+                        title: "Restore this backup?",
+                        body: "Records from the backup file will be merged into your account. Records that are already here are skipped — nothing is overwritten or deleted, and each record returns to its own workspace.",
+                        detail: `File: ${f.name} · ${wsCount} workspace(s) in the file`,
+                        confirmLabel: "Restore backup",
+                      });
+                      if (ok) restoreBackup.mutate(parsed);
+                    } catch {
+                      setRestoreMsg("That file could not be read as a backup. Nothing was restored.");
+                    }
+                  }}
+                />
+                <button type="button" className="btn-ghost px-5 py-2.5 text-sm" disabled={undoImport.isPending} onClick={() => void askUndoImport()}>
+                  Undo last CSV import (this workspace)
+                </button>
+              </div>
+              {restoreMsg ? (
+                <p className="mt-3 rounded-xl bg-[var(--ai)] px-3 py-2 text-sm text-[var(--ai-text)]" role="status">{restoreMsg}</p>
+              ) : null}
+              <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]">
+                {lastImport
+                  ? `Last CSV import in this workspace: ${lastImport.detail} — ${new Date(lastImport.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`
+                  : "No CSV import has been recorded in this workspace yet."}
+              </p>
+            </section>
+          )}
+          {openSection === "categories" && (
+            <section className="card p-5" aria-label="Your custom categories in this workspace">
+              <SectionTitle
+                title="Your custom categories"
+                hint={`Remembered in ${MODE_LABELS[appMode]} only — rename or remove them here`}
+              />
+              {(state.customCategories ?? []).length === 0 ? (
+                <p className="text-sm text-[var(--dim)]">
+                  None yet — pick “✎ Custom” in any category dropdown to add one.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {(state.customCategories ?? []).map((c) => {
+                    const draft = renameDraft[c.id] ?? c.name;
+                    const dir = c.type === "income" ? ("income" as const) : ("expense" as const);
+                    return (
+                      <li key={c.id} className="flex flex-wrap items-center gap-2 rounded-2xl bg-[var(--surface-soft)] px-3 py-2">
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-[var(--dim)]">
+                          {c.type}
+                        </span>
+                        <label className="min-w-0 flex-1">
+                          <span className="sr-only">Rename custom category {c.name}</span>
+                          <input
+                            className="field !py-1.5 text-sm font-bold"
+                            value={draft}
+                            maxLength={60}
+                            onChange={(e) => setRenameDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+                            aria-label={`Rename custom category ${c.name}`}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-ghost px-3 py-1.5 text-xs"
+                          disabled={renameCat.isPending || draft.trim() === c.name || !draft.trim()}
+                          onClick={() => renameCat.mutate({ type: dir, oldName: c.name, newName: draft.trim() })}
+                        >
+                          Rename everywhere
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost px-3 py-1.5 text-xs text-[var(--err-text)]"
+                          disabled={deleteCat.isPending}
+                          onClick={() => void askDeleteCat({ type: dir, name: c.name })}
+                          aria-label={`Remove custom category ${c.name} from the list`}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          )}
+          {openSection === "delete" && (
+            <section className="card border-[#e3b3ae] p-5" aria-label="Delete account permanently">
+                <SectionTitle title="Delete account permanently" />
+                <p className="text-sm leading-relaxed text-[var(--dim)]">
+                  This deletes your account and <strong className="text-[var(--text)]">every record in every workspace</strong> —
+                  transactions, invoices, notes, budgets, everything — and it cannot be undone.
+                  Download a full backup above first if you might want the data again.
+                </p>
+                <form
+                  className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3"
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    const ok = await confirm({
+                      title: "Delete your account forever?",
+                      body: "This is permanent and cannot be undone — there is no Undo for account deletion. Your account and every record in every workspace (Personal, Business, Creator) will be deleted.",
+                      detail: "If you might want this data again, cancel now and download a full backup first (Backup, restore & undo, above).",
+                      confirmLabel: "Yes, delete forever",
+                      cancelLabel: "Keep my account",
+                      danger: true,
+                    });
+                    if (ok) deleteAcct.mutate();
+                  }}
+                >
+                  <Field label="Your password">
+                    <input className="field" type="password" value={delPassword} onChange={(e) => setDelPassword(e.target.value)} aria-label="Password for account deletion" autoComplete="current-password" />
+                  </Field>
+                  <Field label="Type DELETE to confirm">
+                    <input className="field" value={delConfirm} onChange={(e) => setDelConfirm(e.target.value)} aria-label="Type DELETE to confirm account deletion" autoComplete="off" />
+                  </Field>
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      className="btn-danger w-full px-5 py-2.5 text-sm disabled:opacity-50"
+                      disabled={deleteAcct.isPending || !delPassword || delConfirm.trim() !== "DELETE"}
+                    >
+                      {deleteAcct.isPending ? "Deleting…" : "Delete my account forever"}
+                    </button>
+                  </div>
+                </form>
+              </section>
+          )}
+          {openSection === "profile" && (
+            <section className="card p-5" aria-label="Business profile">
+              <SectionTitle title={personal ? "Your profile" : "Business profile"} />
+              <form
+                className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+                onSubmit={(e) => void submitProfile(e)}
+              >
+                <Field label={personal ? "Name for this space" : "Business name"}>
+                  <input className="field" value={name} onChange={(e) => setName(e.target.value)} aria-label="Business name" placeholder={personal ? "e.g. My Daily Spending" : "e.g. Sarya Design Studio"} />
+                </Field>
+                {personal ? null : (
+                  <Field label="Industry">
+                    <input className="field" value={industry} onChange={(e) => setIndustry(e.target.value)} aria-label="Industry" placeholder="e.g. Design services" />
+                  </Field>
+                )}
+                <Field label="Your name">
+                  <input className="field" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} aria-label="Your name" />
+                </Field>
+                <Field label="Your email">
+                  <input className="field" type="email" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} aria-label="Your email" />
+                </Field>
+                <Field label="Mobile number (optional — profile only)">
+                  <input className="field" type="tel" value={ownerPhone} onChange={(e) => setOwnerPhone(e.target.value)} aria-label="Mobile number, optional profile detail" placeholder="+91 …" autoComplete="tel" />
+                  <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
+                    Profile only — never used to sign in, no OTP or SMS is ever sent to it.
+                  </p>
+                </Field>
+                <Field label="Country">
+                  <input className="field" value={country} onChange={(e) => setCountry(e.target.value)} aria-label="Country" />
+                </Field>
+                <Field label="Currency">
+                  <CurrencyPicker
+                    value={currency}
+                    onChange={setCurrency}
+                    disabled={save.isPending || currencyBusy === true}
+                  />
+                  {convertingNow ? (
+                    <p className="mt-1 text-xs font-bold text-[var(--accent)]" role="status">
+                      Converting amounts to {currency}…
+                    </p>
+                  ) : null}
+                </Field>
+                <Field label={personal ? "Money you started with" : "Opening cash balance"}>
+                  <input className="field" type="number" step="1" value={opening} onChange={(e) => setOpening(e.target.value)} aria-label="Opening cash balance" />
+                </Field>
+                <Field label="Preferred timezone">
+                  <select className="field" value={timezone} onChange={(e) => setTimezone(e.target.value)} aria-label="Preferred timezone">
+                    {TIMEZONES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="sm:col-span-2">
+                  <button
+                    type="submit"
+                    className="btn-primary px-6 py-2.5 text-sm"
+                    disabled={save.isPending || currencyBusy === true}
+                  >
+                    {save.isPending ? "Saving…" : currencyBusy === true ? "Converting…" : "Save profile"}
+                  </button>
+                </div>
+              </form>
+              <p className="mt-3 text-xs text-[var(--dim)]">
+                Cash balance = opening balance + posted income − posted expenses; unpaid invoices never count as cash.
+              </p>
+            </section>
+          )}
+          {openSection === "tour" && (
+            <section className="card p-5" aria-label="App tour and help">
+              <SectionTitle
+                title="App tour & help"
+                hint="The guided walkthrough of everything Cashflow Genius can do"
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-primary px-5 py-2.5 text-sm"
+                  onClick={onShowTour}
+                  disabled={!onShowTour}
+                  aria-label="Start the guided app tour"
+                >
+                  🧭 Start the app tour
+                </button>
+              </div>
+            </section>
+          )}
+          {openSection === "activity" && (
+            <section className="card p-5" aria-label="Recent activity">
+              <SectionTitle title="Recent activity" />
+              {state.activity.length === 0 ? (
+                <p className="text-sm text-[var(--dim)]">No activity recorded yet.</p>
+              ) : (
+                <ul className="divide-y divide-[var(--border)]">
+                  {state.activity.map((a) => (
+                    <li key={a.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                      <span>
+                        <strong>{a.action}</strong>
+                        {a.detail ? <span className="text-[var(--dim)]"> — {a.detail}</span> : null}
+                      </span>
+                      <span className="whitespace-nowrap text-xs text-[var(--dim)]">
+                        {new Date(a.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+        </>
+      ) : (
+        <>
+          <div>
+            <h1 className="display-font text-[27px] font-semibold tracking-tight">Settings</h1>
+            <p className="text-sm text-[var(--dim)]">
+              {personal
+                ? "Your mode, profile, preferences and how this workspace is wired."
+                : "Your mode, business profile, preferences and how this workspace is wired."}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {SETTINGS_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setOpenSection(s.id)}
+                className="flex items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4 text-left transition hover:border-[var(--accent)]"
+              >
+                <span
+                  aria-hidden
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--surface-soft)] text-xl text-[var(--accent)]"
+                >
+                  {s.icon}
                 </span>
-                <span className="whitespace-nowrap text-xs text-[var(--dim)]">
-                  {new Date(a.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">{s.title}</span>
+                  <span className="block truncate text-sm text-[var(--muted)]">{s.desc}</span>
                 </span>
-              </li>
+                <span aria-hidden className="shrink-0 text-[var(--muted)]">
+                  ›
+                </span>
+              </button>
             ))}
-          </ul>
-        )}
-      </section>
+          </div>
+        </>
+      )}
     </div>
   );
 }
