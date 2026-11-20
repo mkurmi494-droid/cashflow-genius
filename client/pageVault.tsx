@@ -79,8 +79,7 @@ export function VaultPage({ state, notify, notifyDeleted, confirm, openNoteId }:
         <div>
           <h1 className="display-font text-[27px] font-semibold tracking-tight">Notes — Memory Vault</h1>
           <p className="text-sm text-[var(--dim)]">
-            {isPersonalLike(modeOf(state)) ? "Your money notebook." : "Your business notebook."} Notes auto-save as you type, every earlier version
-            is kept, and timestamps are stored in UTC and shown in {tz}.
+            Notes auto-save as you type. Timestamps shown in {tz}.
           </p>
         </div>
         <button
@@ -124,7 +123,7 @@ export function VaultPage({ state, notify, notifyDeleted, confirm, openNoteId }:
           {shown.length === 0 ? (
             <EmptyState
               title="No notes here yet"
-              body="Create a note, or use the floating Quick Note button anywhere in the app. AI CFO answers, forecasts, scenarios and scanner findings can all be saved here too."
+              body="Create a note, or use the Quick Note button anywhere in the app."
               action={
                 <button type="button" className="btn-primary px-5 py-2.5 text-sm" onClick={() => create.mutate()}>
                   Write your first note
@@ -180,10 +179,6 @@ export function VaultPage({ state, notify, notifyDeleted, confirm, openNoteId }:
             <div className="card flex h-full min-h-64 items-center justify-center px-6 py-12 text-center">
               <div>
                 <p className="font-extrabold">Pick a note to open the editor</p>
-                <p className="mt-1 text-sm text-[var(--dim)]">
-                  Glass note cards expand into the full editor here, with version history
-                  one tap away.
-                </p>
               </div>
             </div>
           )}
@@ -381,9 +376,7 @@ function NoteEditor({
         </label>
         {note.sourceModule ? (
           <p className="text-xs text-[var(--dim)]">
-            Saved from {note.sourceModule}
-            {note.sourceId ? ` · source ${note.sourceId}` : ""}. The original creation
-            time above never changes when you edit.
+            Saved from {note.sourceModule}.
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
@@ -781,9 +774,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         />
         {finePointer ? (
           <>
-            <p className="text-sm leading-relaxed text-[var(--dim)]">
-              Pick a cursor — it changes immediately, and your choice is saved to your account.
-            </p>
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Choose your cursor style">
               {CURSOR_OPTIONS.map((opt) => {
                 const selected = cursorChoice === opt.id;
@@ -891,11 +881,8 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
       <section className="card p-5" aria-label="Backup, restore and undo">
         <SectionTitle
           title="Backup, restore & undo"
-          hint="Your data is yours — full structure, not CSV-only, and bulk edits can be undone"
+          hint="Full JSON backup of every workspace."
         />
-        <p className="text-sm leading-relaxed text-[var(--dim)]">
-          One JSON file with every workspace. Restoring merges it in — nothing is overwritten or deleted.
-        </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" className="btn-primary px-5 py-2.5 text-sm" disabled={exportBackup.isPending} onClick={() => exportBackup.mutate()}>
             {exportBackup.isPending ? "Preparing…" : "Download full backup"}
@@ -956,7 +943,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         />
         {(state.customCategories ?? []).length === 0 ? (
           <p className="text-sm text-[var(--dim)]">
-            None yet. Pick “✎ Custom — type your own” in any category dropdown and the name will be remembered here.
+            None yet — pick “✎ Custom” in any category dropdown to add one.
           </p>
         ) : (
           <ul className="space-y-2">
@@ -1000,9 +987,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             })}
           </ul>
         )}
-        <p className="mt-2 text-xs text-[var(--dim)]">
-          Renaming updates every record using the name. Removing only takes it off this list.
-        </p>
       </section>
 
       <section className="card border-[#e3b3ae] p-5" aria-label="Delete account permanently">
@@ -1068,9 +1052,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           <Field label="Mobile number (optional — profile only)">
             <input className="field" type="tel" value={ownerPhone} onChange={(e) => setOwnerPhone(e.target.value)} aria-label="Mobile number, optional profile detail" placeholder="+91 …" autoComplete="tel" />
             <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-              Just a contact detail on your profile. It is never used to sign in
-              and no OTP or SMS is ever sent to it — sign-in is email + password
-              or Google only.
+              Profile only — never used to sign in, no OTP or SMS is ever sent to it.
             </p>
           </Field>
           <Field label="Country">
@@ -1109,9 +1091,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           </div>
         </form>
         <p className="mt-3 text-xs text-[var(--dim)]">
-          Amounts display in Indian numbering format (en-IN) by default. Cash balance =
-          opening balance + posted income − posted expenses; unpaid invoices never count
-          as cash.
+          Cash balance = opening balance + posted income − posted expenses; unpaid invoices never count as cash.
         </p>
       </section>
 
@@ -1120,9 +1100,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           title="App tour & help"
           hint="The guided walkthrough of everything Cashflow Genius can do"
         />
-        <p className="text-sm leading-relaxed text-[var(--dim)]">
-          A guided walkthrough of the app — it only explains, never touches your data.
-        </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
