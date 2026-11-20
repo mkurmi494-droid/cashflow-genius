@@ -198,7 +198,7 @@ export function InstallButton({
         onClick={() => {
           void promptInstall().then((outcome) => {
             if (outcome === "accepted") onNotify?.("Installing Cashflow Genius — look for it on your home screen.");
-            else if (outcome === "dismissed") onNotify?.("Install dismissed — you can install any time from Settings → Install app.");
+            else if (outcome === "dismissed") onNotify?.("Install dismissed — you can install any time from your browser menu.");
           });
         }}
       >
@@ -208,11 +208,7 @@ export function InstallButton({
   }
   return (
     <p className="text-sm leading-relaxed text-[var(--dim)]">
-      To install on this phone: open your browser menu (⋮ or Share) and tap{" "}
-      <strong className="text-[var(--text)]">“Add to Home Screen”</strong> /{" "}
-      <strong className="text-[var(--text)]">“Install app”</strong>. Cashflow Genius then
-      opens full-screen like a real app. (Some browsers offer the one-tap install button
-      here instead — if you don&rsquo;t see it, the menu route always works.)
+      To install: open your browser menu (⋮ or Share) and tap <strong className="text-[var(--text)]">“Add to Home Screen”</strong> / <strong className="text-[var(--text)]">“Install app”</strong>.
     </p>
   );
 }
