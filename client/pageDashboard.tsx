@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 Area,
@@ -556,6 +556,37 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
   const s = useMemo(() => summarise(state), [state]);
   const score = healthScore(state, s);
   const [now, setNow] = useState(new Date());
+  const queryClient = useQueryClient();
+
+  // Recurring savings have no background job — opening the app is what
+  // moves scheduled money. Apply due schedules once per mount; the
+  // action is idempotent (a second call finds nothing due), so the
+  // Savings page firing it too is harmless. Only a real application
+  // notifies — a skipped schedule is reported on the Savings page,
+  // where the user can act on it.
+  const schedulesAppliedRef = useRef(false);
+  const applySchedulesMut = useMutation({
+    mutationFn: () => api.applyDueSavingsSchedules({}),
+    onSuccess: (res) => {
+      if (res.applied.length > 0) {
+        void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+        const total = res.applied.reduce((a, x) => a + x.amountCents, 0);
+        notify(
+          res.applied.length === 1
+            ? `Scheduled savings applied: ${fmtMoney(total, cur)} moved into “${res.applied[0]?.goalName}”.`
+            : `Scheduled savings applied: ${fmtMoney(total, cur)} moved into ${res.applied.length} pots.`,
+        );
+      }
+    },
+  });
+  useEffect(() => {
+    if (schedulesAppliedRef.current) return;
+    schedulesAppliedRef.current = true;
+    applySchedulesMut.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const briefing = useQuery({
     queryKey: ["briefing", state.transactions.length],
