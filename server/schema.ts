@@ -63,7 +63,16 @@ export const businesses = pgTable("businesses", {
   // How this account uses the app: "business" turns on the business money
   // management modules; "personal" focuses on daily spending. Saved per
   // account on the workspace row; switching never touches transactions.
-  mode: text("mode", { enum: ["business", "personal", "creator", "student"] })
+  // Mode values the app offers: business / personal / creator.
+  // "student" is deliberately NOT here anymore (Student / First Salary
+  // was removed from the app 2026-11-20; its records fold into
+  // Personal). The Postgres enum TYPE still contains 'student' and one
+  // empty legacy workspace row still carries it — Postgres cannot drop
+  // an enum value, so do NOT generate a migration for this difference.
+  // The row is inert: the app never offers, accepts or returns it as
+  // an active mode (client modeOf folds a stored "student" to
+  // "personal"; server zod enums reject it).
+  mode: text("mode", { enum: ["business", "personal", "creator"] })
     .notNull()
     .default("business"),
   name: text("name").notNull().default(""),
@@ -334,8 +343,8 @@ export const scamChecks = pgTable("scam_checks", {
 });
 
 // ---------- per-account active workspace ----------
-// Each account has up to four fully separate workspaces, one per money
-// mode (business / personal / creator / student). Every record table
+// Each account has up to three fully separate workspaces, one per money
+// mode (business / personal / creator). Every record table
 // carries a `mode` column naming its workspace; this row remembers which
 // workspace the account is currently looking at. Switching modes only
 // changes this pointer — records are never moved or mixed.
