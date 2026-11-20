@@ -36,6 +36,13 @@
       "when": 1795026635942,
       "tag": "0004_financial_insights",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795060000000,
+      "tag": "0005_savings_schedules",
+      "breakpoints": true
     }
   ]
 }
