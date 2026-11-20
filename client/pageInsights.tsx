@@ -274,11 +274,7 @@ function BudgetPlannerModal({
                 </button>
               ))}
             </div>
-            {rule === "50-30-20" ? (
-              <p className="mt-1.5 text-xs leading-relaxed text-[var(--dim)]">
-                The classic split: 50% needs, 30% wants, 20% savings — shaped by what you actually spend.
-              </p>
-            ) : (
+            {rule === "50-30-20" ? null : (
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {(
                   [
@@ -325,9 +321,6 @@ function BudgetPlannerModal({
           <button type="submit" className="btn-primary w-full px-6 py-3 text-sm" disabled={suggest.isPending}>
             Create my budget →
           </button>
-          <p className="text-center text-[11px] leading-relaxed text-[var(--dim)]">
-            The AI only suggests — nothing is saved until you check the amounts and tap Save.
-          </p>
         </form>
       )}
     </Modal>
@@ -398,11 +391,8 @@ export function ScannerPage({ state, notify, notifyDeleted, confirm, saveToVault
       <div className="text-center">
         <h1 className="display-font text-[27px] font-semibold tracking-tight">{personal ? "Spending check & budgets" : "Find leaks & budgets"}</h1>
         <p className="mx-auto mt-1 max-w-xl text-sm text-[var(--dim)]">
-          {personal
-            ? "A deterministic check of your own daily spending: possible duplicates, unusual increases, repeated subscriptions, recurring costs and budget overspends."
-            : "A deterministic analysis of your own records: possible duplicates, unusual increases, repeated subscriptions, recurring costs and budget overspends."}
-          Findings are flagged as <em>possible</em> anomalies to review — never
-          presented as confirmed fraud.
+          A check of your own spending: possible duplicates, unusual increases,
+          repeated subscriptions and budget overspends. Flags are <em>possible</em> anomalies, never confirmed fraud.
         </p>
         <div className="relative mx-auto mt-5 max-w-sm overflow-hidden rounded-full">
           <button
@@ -432,20 +422,14 @@ export function ScannerPage({ state, notify, notifyDeleted, confirm, saveToVault
         state.transactions.length === 0 ? (
           <EmptyState
             title="Nothing to scan yet"
-            body="The scanner reads your recorded transactions. Add expenses in Money Flow and then run a scan — it flags duplicate charges, price hikes and unusual spikes with the exact amounts."
+            body="Add expenses in Money Flow, then run a scan."
           />
-        ) : (
-          <div className="card px-5 py-8 text-center text-sm text-[var(--dim)]">
-            Press <strong className="text-[var(--text)]">{personal ? "CHECK MY SPENDING" : "SCAN MY BUSINESS"}</strong> to analyse{" "}
-            {state.transactions.length} recorded transactions.
-          </div>
-        )
+        ) : null
       ) : findings.length === 0 ? (
         <div className="card px-5 py-8 text-center">
           <p className="text-lg font-extrabold text-[var(--accent)]">No leaks found 🎉</p>
           <p className="mt-1 text-sm text-[var(--dim)]">
-            No duplicates, spikes, repeated subscriptions or budget breaches were
-            detected in the records scanned.
+            Nothing flagged in the records scanned.
           </p>
         </div>
       ) : (
@@ -739,11 +723,7 @@ export function TaxPage({ state, notify }: PageProps) {
           </li>
         </ul>
         <div className="mt-4 rounded-xl bg-[var(--ai)] px-4 py-3 text-sm text-[var(--ai-text)]">
-          <strong>Learn:</strong> GST is a value-added tax — you collect it on sales
-          (output tax) and claim back the GST you paid on eligible business purchases
-          (input tax credit). You remit only the difference. Rates and eligibility vary
-          by product, state and registration type, which is why every parameter above is
-          yours to configure.
+          <strong>Learn:</strong> GST = tax collected on sales minus tax paid on eligible purchases; you remit the difference.
         </div>
       </section>
 
@@ -775,9 +755,7 @@ export function TaxPage({ state, notify }: PageProps) {
           };
           return fyInvs.length === 0 ? (
             <p className="text-sm text-[var(--dim)]">
-              No invoices were issued in this financial year in this workspace, so there is
-              nothing to export. This export lists your own invoices for reconciliation —
-              it does not file a return or generate an e-invoice for you.
+              No invoices in this financial year — nothing to export.
             </p>
           ) : (
             <>
@@ -785,9 +763,7 @@ export function TaxPage({ state, notify }: PageProps) {
                 {fyInvs.length} invoice(s) totalling{" "}
                 {fmtMoney(fyInvs.reduce((a, i) => a + i.totalCents, 0), cur)} (taxable{" "}
                 {fmtMoney(fyInvs.reduce((a, i) => a + i.subtotalCents, 0), cur)} + GST{" "}
-                {fmtMoney(fyInvs.reduce((a, i) => a + i.taxCents, 0), cur)}). Download the CSV
-                and reconcile it with the GST portal / your CA before filing. Cashflow Genius
-                does not file GSTR-1 or create e-invoices itself.
+                {fmtMoney(fyInvs.reduce((a, i) => a + i.taxCents, 0), cur)}). Download the CSV and reconcile before filing.
               </p>
               <button type="button" className="btn-primary mt-3 px-5 py-2.5 text-sm" onClick={exportCsv}>
                 Download GSTR-1 style CSV
@@ -929,10 +905,6 @@ export function ReportsPage({ state, notify }: PageProps) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="display-font text-[27px] font-semibold tracking-tight">Reports</h1>
-          <p className="text-sm text-[var(--dim)]">
-            Every report is produced by the same calculation engine as the Command
-            Center — one source of truth.
-          </p>
         </div>
         <button
           type="button"
@@ -1033,8 +1005,7 @@ export function ReportsPage({ state, notify }: PageProps) {
           </table>
         </div>
         <p className="mt-3 text-xs text-[var(--dim)]">
-          The PDF export contains this same report in full. Figures count posted
-          transactions only; unpaid invoices never count as cash.
+          The PDF contains this same report in full.
         </p>
       </section>
     </div>
