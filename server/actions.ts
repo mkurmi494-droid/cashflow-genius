@@ -36,6 +36,17 @@ import {
   nextDueDateAfter,
   type ScheduleFrequency,
 } from "./lib/savingsSchedules";
+import {
+  classifyBudgetCategory,
+  deterministicBudget,
+  normalizeBudgetSuggestion,
+  type BudgetSuggestion,
+} from "./lib/budgetPlanner";
+import {
+  normalizeSmartEntry,
+  parseSmartEntryText,
+  type SmartEntryResult,
+} from "./lib/smartEntry";
 
 type Db = typeof db;
 
@@ -1441,6 +1452,38 @@ const receiptOutShape = z.object({
     )
     .default([]),
   notes: z.string().default(""),
+});
+
+const smartEntryOutShape = z.object({
+  entries: z
+    .array(
+      z.object({
+        description: z.string(),
+        amountCents: z.number(),
+        type: z.string(),
+        category: z.string(),
+        date: z.string(),
+        counterparty: z.string().default(""),
+      }),
+    )
+    .default([]),
+  note: z.string().default(""),
+});
+
+const budgetOutShape = z.object({
+  needsPct: z.number(),
+  wantsPct: z.number(),
+  savingsPct: z.number(),
+  allocations: z
+    .array(
+      z.object({
+        category: z.string(),
+        bucket: z.string(),
+        monthlyCents: z.number(),
+      }),
+    )
+    .default([]),
+  note: z.string().default(""),
 });
 
 const savingsTransferShape = z.object({
@@ -4895,6 +4938,205 @@ export const Actions = {
       await rememberCustomCategory(db, user.id, wsMode, "expense", category);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { ok: true as const };
+    },
+  }),
+
+  // ---------- AI budget planner ----------
+  // The AI only suggests a budget — nothing is written here. The
+  // client shows the suggestion as editable rows and writes only
+  // what the user confirms, one saveBudget per category. Grounded
+  // in real figures: the monthly income (the user's figure, or the
+  // average posted income of the last 3 complete months) and the last
+  // 3 months' actual spending per category. The rule is 50/30/20 by
+  // default, or the user's own percentages. When the AI call fails
+  // or its answer cannot be repaired, the deterministic 50/30/20
+  // rule (server/lib/budgetPlanner.ts) answers instead — the response
+  // says which one it is.
+  suggestBudget: defineAction({
+    description:
+      "Suggests monthly category budgets from real income and spending: the 50/30/20 rule by default, or the user's own needs/wants/savings percentages, with the AI shaping the split by the last 3 months' actual spending. Nothing is written — the client shows the suggestion for the user to edit and save.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      monthlyIncomeCents: z.number().int().nonnegative().max(100_000_000_00).optional(),
+      rule: z.enum(["50-30-20", "custom"]).optional(),
+      needsPct: z.number().int().min(0).max(100).optional(),
+      wantsPct: z.number().int().min(0).max(100).optional(),
+      savingsPct: z.number().int().min(0).max(100).optional(),
+      lifestyle: z.string().max(500).optional(),
+    }),
+    response: z.object({
+      source: z.enum(["ai", "rule"]),
+      monthlyIncomeCents: z.number(),
+      needsPct: z.number(),
+      wantsPct: z.number(),
+      savingsPct: z.number(),
+      allocations: z.array(
+        z.object({
+          category: z.string(),
+          bucket: z.enum(["needs", "wants"]),
+          monthlyCents: z.number(),
+        }),
+      ),
+      note: z.string(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const rule = args.rule ?? "50-30-20";
+      let needsPct = 50;
+      let wantsPct = 30;
+      let savingsPct = 20;
+      if (rule === "custom") {
+        needsPct = args.needsPct ?? 50;
+        wantsPct = args.wantsPct ?? 30;
+        savingsPct = args.savingsPct ?? 20;
+        if (needsPct + wantsPct + savingsPct !== 100)
+          throw new Error("Your three percentages must add up to 100.");
+      }
+      // Last 3 complete months (not the partial current one).
+      const curKey = monthKey(todayStr());
+      const months = [shiftMonth(curKey, -3), shiftMonth(curKey, -2), shiftMonth(curKey, -1)];
+      const { transactions: txns } = await loadWorkspaceBatch(db, user.id, wsMode);
+      const posted = txns.filter((t) => t.status === "posted");
+      const inMonths = (t: (typeof posted)[number]) => months.includes(monthKey(t.date));
+      const incomeByMonth = new Map<string, number>();
+      for (const t of posted.filter((t) => t.type === "income" && inMonths(t))) {
+        const k = monthKey(t.date);
+        incomeByMonth.set(k, (incomeByMonth.get(k) ?? 0) + t.amountCents);
+      }
+      const incomeMonths = [...incomeByMonth.values()].filter((v) => v > 0);
+      const avgIncome =
+        incomeMonths.length > 0
+          ? Math.round(incomeMonths.reduce((s, v) => s + v, 0) / incomeMonths.length)
+          : 0;
+      const monthlyIncomeCents = args.monthlyIncomeCents && args.monthlyIncomeCents > 0 ? args.monthlyIncomeCents : avgIncome;
+      if (monthlyIncomeCents <= 0)
+        throw new Error("Add some income first, or type your monthly income — a budget needs an income to split.");
+      const spendByCat = new Map<string, number>();
+      for (const t of posted.filter((t) => t.type === "expense" && inMonths(t))) {
+        spendByCat.set(t.category, (spendByCat.get(t.category) ?? 0) + t.amountCents);
+      }
+      const history = [...spendByCat.entries()].map(([category, total]) => ({
+        category,
+        avgMonthlyCents: Math.round(total / 3),
+      }));
+      // Category universe: everything this workspace has spent on,
+      // plus its existing budgets and remembered custom categories.
+      const categorySet = new Set<string>(history.map((h) => h.category));
+      const buds = await db
+        .select()
+        .from(schema.budgets)
+        .where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode)));
+      for (const b of buds) categorySet.add(b.category);
+      const customs = await db
+        .select()
+        .from(schema.customCategories)
+        .where(
+          and(
+            eq(schema.customCategories.ownerId, user.id),
+            eq(schema.customCategories.mode, wsMode),
+            eq(schema.customCategories.type, "expense"),
+          ),
+        );
+      for (const c of customs) categorySet.add(c.name);
+      const categories = [...categorySet];
+      const fallback = (): BudgetSuggestion =>
+        deterministicBudget({ monthlyIncomeCents, needsPct, wantsPct, savingsPct, history, categories });
+      let raw: unknown = null;
+      try {
+        raw = await aiComplete(
+          `You are planning a monthly budget for a money-tracking app. The user earns ${monthlyIncomeCents} paise a month (₹${(monthlyIncomeCents / 100).toLocaleString("en-IN")}). Split it ${needsPct}% needs / ${wantsPct}% wants / ${savingsPct}% savings. Their average monthly spending over the last 3 months, per category, is: ${history.length ? history.map((h) => `${h.category} ₹${(h.avgMonthlyCents / 100).toLocaleString("en-IN")}`).join("; ") : "no spending history yet"}. Categories to budget for: ${categories.length ? categories.join(", ") : "General"}. ${args.lifestyle ? `About their life, in their words: ${args.lifestyle}. ` : ""}Shape the split by what they actually spend — a category they spend a lot on gets a bigger share of its bucket; a category with no history gets a small starter share. Never allocate savings to a category; savings is just the leftover percentage. Return ONLY JSON with exactly these keys, no other keys: needsPct (number, ${needsPct}), wantsPct (number, ${wantsPct}), savingsPct (number, ${savingsPct}), allocations (an array, each with exactly: category (string, one of the categories listed), bucket ("needs" or "wants" — needs are essentials like food, rent, bills, transport, health, education; wants are everything else), monthlyCents (integer paise, 1 rupee = 100 paise)), note (one short sentence explaining the split in plain language).`,
+          { schema: budgetOutShape },
+          await getAiSettings(user.id),
+        );
+      } catch {
+        raw = null;
+      }
+      const repaired = raw === null ? null : normalizeBudgetSuggestion(raw, { monthlyIncomeCents, categories });
+      if (repaired) return { source: "ai" as const, monthlyIncomeCents, ...repaired };
+      const det = fallback();
+      return { source: "rule" as const, monthlyIncomeCents, ...det };
+    },
+  }),
+
+  // ---------- Smart Add ----------
+  // "dinner 50, shopping 200 yesterday" — one line, several
+  // transactions. The AI splits it into entries (description, amount,
+  // expense/income, category, date, where it came from or went);
+  // the deterministic parser (server/lib/smartEntry.ts) answers when
+  // the AI call fails. Nothing is written here: the client shows the
+  // draft for the user to check and edit, and only saves what they
+  // confirm, one saveTransaction per entry. Dates are IST; today is
+  // passed to the model so "yesterday"/"kal" resolve correctly.
+  parseSmartEntry: defineAction({
+    description:
+      "Parses one free-text line with several amounts into draft transactions (description, amount, expense/income, category, date, counterparty). Nothing is written — the client shows the draft for the user to check and edit, and only saves what they confirm.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      text: z.string().min(3).max(1000),
+    }),
+    response: z.object({
+      source: z.enum(["ai", "rule"]),
+      entries: z.array(
+        z.object({
+          description: z.string(),
+          amountCents: z.number(),
+          type: z.enum(["expense", "income"]),
+          category: z.string(),
+          date: z.string(),
+          counterparty: z.string(),
+        }),
+      ),
+      note: z.string(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const today = todayStrIst();
+      const { transactions: txns } = await loadWorkspaceBatch(db, user.id, wsMode);
+      const expenseSet = new Set<string>();
+      const incomeSet = new Set<string>();
+      for (const t of txns) {
+        if (t.type === "expense") expenseSet.add(t.category);
+        else incomeSet.add(t.category);
+      }
+      const buds = await db
+        .select()
+        .from(schema.budgets)
+        .where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode)));
+      for (const b of buds) expenseSet.add(b.category);
+      const customs = await db
+        .select()
+        .from(schema.customCategories)
+        .where(and(eq(schema.customCategories.ownerId, user.id), eq(schema.customCategories.mode, wsMode)));
+      for (const c of customs) {
+        if (c.type === "income") incomeSet.add(c.name);
+        else expenseSet.add(c.name);
+      }
+      if (!expenseSet.has("General")) expenseSet.add("General");
+      if (!incomeSet.has("General")) incomeSet.add("General");
+      const input = {
+        today,
+        expenseCategories: [...expenseSet],
+        incomeCategories: [...incomeSet],
+      };
+      const fallback = (): SmartEntryResult => parseSmartEntryText(args.text, input);
+      let raw: unknown = null;
+      try {
+        raw = await aiComplete(
+          `You are parsing one free-text money line into transactions for a money-tracking app. Today is ${today} (IST). The user wrote: "${args.text}". Split it into one entry per amount — "dinner 50, shopping 200" is two entries. For each entry return ONLY JSON with exactly these keys, no other keys: entries (an array, each with exactly: description (what it was, short, e.g. "dinner" — never include the amount), amountCents (integer paise, 1 rupee = 100 paise), type ("expense" unless the words say money came in — received, salary, refund, "mila", "aaya"), category (pick the best fit from the expense list for expenses: ${input.expenseCategories.join(", ")} — or the income list for income: ${input.incomeCategories.join(", ")} — use General only if nothing fits), date (YYYY-MM-DD — "today"/"aaj" is ${today}, "yesterday"/"kal" is the day before, "tomorrow"/"parson" the day after, a written "12 Nov" is that date this year; when no date is written use ${today}), counterparty (where the money came from or went — a shop, a person — or ""), note (one short sentence about anything unclear, or ""). Never invent an amount or a date — when an item has no amount, leave it out.`,
+          { schema: smartEntryOutShape },
+          await getAiSettings(user.id),
+        );
+      } catch {
+        raw = null;
+      }
+      const repaired = raw === null ? null : normalizeSmartEntry(raw, { today });
+      if (repaired) return { source: "ai" as const, ...repaired };
+      const det = fallback();
+      return { source: "rule" as const, ...det };
     },
   }),
 
