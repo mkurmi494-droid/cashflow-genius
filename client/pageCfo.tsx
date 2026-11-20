@@ -4,8 +4,8 @@ import { api, type ApiResponse } from "./api";
 import { buildTurns, displayRawText } from "./cfoHistory";
 import { addDays, buildCalendarEvents, fmtMoney, prettyDate, summarise, todayStr, totalSavedCents } from "./lib";
 import type { PageProps } from "./types";
-import { Badge, GlassOrb, SectionTitle } from "./components";
-import { LoadingMark } from "./LoadingMark";
+import { Badge, SectionTitle } from "./components";
+import { AiAvatar } from "./AiAvatar";
 
 type CfoAnswer = ApiResponse<typeof api, "askCfo">["answer"];
 type CfoLang = "en" | "hinglish";
@@ -279,7 +279,10 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
           style={{ background: "radial-gradient(circle, rgba(237,233,254,0.9), transparent 70%)" }}
         />
         <div className="relative flex flex-col items-center gap-5 sm:flex-row">
-          <GlassOrb size={150} tone="ai" label="AI CFO" sub="The brain of your ledger" />
+          <div className="flex flex-col items-center gap-2">
+            <AiAvatar size={120} label="AI CFO avatar" />
+            <p className="text-xs font-semibold text-[var(--dim)]">The brain of your ledger</p>
+          </div>
           <div className="text-center sm:text-left">
             <h1 className="display-font text-[27px] font-semibold tracking-tight">AI CFO</h1>
           </div>
@@ -461,7 +464,7 @@ export function AiCfoPage({ state, notify, confirm, saveToVault }: PageProps) {
             {pendingLocal.map((t, i) => answerCard(t.a, t.q, 1000 + i))}
             {ask.isPending ? (
               <div className="card flex items-center gap-3 p-4" role="status">
-                <LoadingMark inline className="h-6 w-6" />
+                <AiAvatar size={32} pulse label="AI CFO is thinking" />
                 <p className="text-sm font-semibold">
                   The AI CFO is reading your calculated figures…
                 </p>
