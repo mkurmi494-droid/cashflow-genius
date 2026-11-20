@@ -120,10 +120,6 @@ export function InvoicesPage({ state, notify, notifyDeleted, confirm, saveToVaul
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="display-font text-[27px] font-semibold tracking-tight">Invoices</h1>
-          <p className="text-sm text-[var(--dim)]">
-            Marking an invoice paid creates exactly one linked income transaction —
-            duplicates are blocked in the database.
-          </p>
         </div>
         <button
           type="button"
@@ -174,7 +170,7 @@ export function InvoicesPage({ state, notify, notifyDeleted, confirm, saveToVaul
       {shown.length === 0 ? (
         <EmptyState
           title={state.invoices.length === 0 ? "No invoices yet" : "No invoices with this status"}
-          body="Create an invoice with line items, discount and tax — totals calculate automatically. When it is paid, the money lands in your ledger exactly once."
+          body="Create an invoice with line items, discount and tax — totals calculate automatically."
           action={
             state.invoices.length === 0 ? (
               <button
