@@ -451,5 +451,164 @@ check(
   "Edit the expense on 2026-11-20 · Food & groceries · ₹1,000",
 );
 
+// (19) normalizeHomeChatReply — Sarya's report, 2026-11-21 00:30 IST:
+// three consecutive model answers were thrown away by the strict
+// reply schema even though each carried a complete instruction:
+// a bare edit plan, and {"kind":"action","plan":{...}} with no reply.
+// The normaliser salvages all of them; the plan is still strictly
+// validated and never executes on a bad shape.
+const bareEdit = mod.normalizeHomeChatReply(
+  {
+    kind: "edit_transaction",
+    matchType: "expense",
+    matchAmountCents: 500,
+    matchCategory: "food",
+    matchDescription: "Food expense",
+    matchDate: "2026-11-21",
+    amountCents: 300,
+    category: "food",
+    description: "Food expense",
+    date: "2026-11-20",
+  },
+  "2026-11-21",
+  fmt,
+);
+check("bare edit plan salvaged as action", bareEdit.ok, true);
+check("bare edit plan kind", bareEdit.kind, "action");
+check("bare edit plan kept", bareEdit.plan?.kind, "edit_transaction");
+check("bare edit plan reply generated", bareEdit.reply, "Edit the expense on 2026-11-21 · food · ₹5");
+const envelopeAdd = mod.normalizeHomeChatReply(
+  {
+    kind: "action",
+    plan: {
+      kind: "add_transaction",
+      type: "income",
+      amountCents: 2100000,
+      category: "income",
+      description: "Income for the month",
+      counterparty: "unknown",
+      date: "2026-11-22",
+    },
+  },
+  "2026-11-21",
+  fmt,
+);
+check("envelope add without reply salvaged", envelopeAdd.ok, true);
+check("envelope add kind", envelopeAdd.kind, "action");
+check(
+  "envelope add reply generated",
+  envelopeAdd.reply,
+  "Add income ₹21,000 · income · Income for the month · 2026-11-22",
+);
+const envelopeEdit = mod.normalizeHomeChatReply(
+  {
+    kind: "action",
+    plan: {
+      kind: "edit_transaction",
+      matchType: "expense",
+      matchAmountCents: 500,
+      matchCategory: "food",
+      matchDescription: "Food expense",
+      matchDate: "2026-11-21",
+      amountCents: 300,
+      category: "food",
+      description: "Food expense",
+      date: "2026-11-21",
+    },
+  },
+  "2026-11-21",
+  fmt,
+);
+check("envelope edit without reply salvaged", envelopeEdit.ok, true);
+check("envelope edit kind", envelopeEdit.kind, "action");
+check(
+  "envelope edit plan kept",
+  envelopeEdit.plan,
+  {
+    kind: "edit_transaction",
+    matchType: "expense",
+    matchAmountCents: 500,
+    matchCategory: "food",
+    matchDescription: "Food expense",
+    matchDate: "2026-11-21",
+    amountCents: 300,
+    category: "food",
+    description: "Food expense",
+    date: "2026-11-21",
+  },
+);
+const envelopeDelete = mod.normalizeHomeChatReply(
+  {
+    kind: "confirm",
+    plan: { kind: "delete_transaction", type: "expense", amountCents: 50000, date: "2026-11-20", description: "food" },
+  },
+  "2026-11-21",
+  fmt,
+);
+check("envelope delete without reply salvaged", envelopeDelete.ok, true);
+check("envelope delete kind", envelopeDelete.kind, "confirm");
+check(
+  "envelope delete reply is a proposal",
+  envelopeDelete.reply,
+  "Shall I delete the expense of ₹500 on 2026-11-20 (food)?",
+);
+check(
+  "envelope delete question filled from reply",
+  envelopeDelete.question,
+  "Shall I delete the expense of ₹500 on 2026-11-20 (food)?",
+);
+check(
+  "double-nested plan in envelope unwraps",
+  mod.normalizeHomeChatReply(
+    {
+      kind: "action",
+      plan: {
+        add_transaction: {
+          kind: "add_transaction",
+          type: "expense",
+          amountCents: 50000,
+          category: "Food",
+          date: "2026-11-21",
+        },
+      },
+    },
+    "2026-11-21",
+    fmt,
+  ).plan?.kind,
+  "add_transaction",
+);
+check(
+  "reply alias 'answer' used when reply missing",
+  mod.normalizeHomeChatReply({ kind: "chat", answer: "You have ₹1,000 left." }, "2026-11-21", fmt).reply,
+  "You have ₹1,000 left.",
+);
+check(
+  "one-level answer wrapper unwraps",
+  mod.normalizeHomeChatReply({ answer: { kind: "chat", reply: "hi there" } }, "2026-11-21", fmt).reply,
+  "hi there",
+);
+check(
+  "normal shape unchanged",
+  mod.normalizeHomeChatReply(
+    { kind: "chat", reply: "Hello!", question: null, plan: null },
+    "2026-11-21",
+    fmt,
+  ),
+  { ok: true, kind: "chat", reply: "Hello!", question: null, plan: null, planError: null },
+);
+check("null reply rejected", mod.normalizeHomeChatReply(null, "2026-11-21", fmt).ok, false);
+check(
+  "action without plan downgrades to chat",
+  mod.normalizeHomeChatReply({ kind: "action", reply: "Done-ish" }, "2026-11-21", fmt).kind,
+  "chat",
+);
+const badPlan = mod.normalizeHomeChatReply(
+  { kind: "action", plan: { kind: "add_transaction", type: "expense", amountCents: 0, category: "Food", date: "2026-11-21" } },
+  "2026-11-21",
+  fmt,
+);
+check("invalid plan in envelope is not executed", badPlan.plan, null);
+check("invalid plan in envelope reports the error", badPlan.planError, "Transaction needs a positive amount.");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
