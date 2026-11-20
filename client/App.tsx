@@ -14,7 +14,7 @@ VerifyScreen,
 import type { Route } from "./types";
 import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, currencyConfirmOptions, fileToBase64, fmtMoney, isPersonalLike, modeOf, todayStr, workspaceHasMoney, type AppMode, type State } from "./lib";
 import { CurrencyPicker, currencyMeta } from "./currencyPicker";
-import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
+import { CalcIcon, CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { LoadingMark } from "./LoadingMark";
 import { AiAvatar } from "./AiAvatar";
 import { DashboardPage } from "./pageDashboard";
@@ -64,6 +64,16 @@ const NAV: { route: Route; label: string; short: string; icon: string; path: str
   { route: "tax", label: "GST & tax", short: "Tax", icon: "§", path: "app/tax", group: "business" },
   { route: "reports", label: "Reports", short: "Reports", icon: "▦", path: "app/reports", group: "business" },
 ];
+
+// The navigation shows only these three — Home, Money in & out, Money
+// Tools. Every other tool (Budget, Savings, Lend & borrow, Debt & dues,
+// Scam Shield, What-if, Future forecast, Invoices, GST & tax, Reports,
+// Notes, AI CFO) lives ONLY inside Money Tools. The full NAV list above
+// stays as the route registry so deep links, the page switch and Money
+// Tools cards keep working. (Changed 2026-11-20 at Sarya's ask.)
+const MAIN_NAV = NAV.filter(
+  (n) => n.route === "dashboard" || n.route === "money-flow" || n.route === "money-tools",
+);
 
 function routeFromHash(): Route {
   const h = window.location.hash.replace(/^#\/?/, "");
@@ -1331,6 +1341,17 @@ export function App() {
         void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
         void queryClient.invalidateQueries({ queryKey: ["note-versions"] });
         void queryClient.invalidateQueries({ queryKey: ["cg-insights"] });
+        // A currency/profile change (updateBusiness) rewrites amounts
+        // that live outside ["cg-state"] — lend/borrow entries,
+        // recurring savings schedules and the AI briefing text. Those
+        // queries must refetch too, or the page keeps showing the old
+        // numbers under the new currency symbol. (Found 2026-11-20:
+        // Lend & Borrow showed only the new symbol after a change.)
+        if (detail?.action === "updateBusiness") {
+          void queryClient.invalidateQueries({ queryKey: ["cg-lend-borrow"] });
+          void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+          void queryClient.invalidateQueries({ queryKey: ["briefing"] });
+        }
       })();
       if (detail && INSIGHT_DATA_ACTIONS.has(detail.action)) {
         // Fire-and-forget: the server debounces runs to one per
@@ -1996,10 +2017,10 @@ export function App() {
           ) : null}
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-3">
-          {NAV.map((n, i) => {
+          {MAIN_NAV.map((n, i) => {
             const deemph = personal && n.group === "business";
             const showBizHeading =
-              !collapsed && n.group === "business" && NAV[i - 1]?.group !== "business";
+              !collapsed && n.group === "business" && MAIN_NAV[i - 1]?.group !== "business";
             return (
               <div key={n.route}>
                 {showBizHeading ? (
@@ -2062,7 +2083,7 @@ export function App() {
                 : "text-[var(--dim)] hover:bg-[var(--surface-soft)] hover:text-[var(--text)]"
             }`}
           >
-            <span aria-hidden className="w-5 text-center text-base">🧮</span>
+            <span aria-hidden className="flex w-5 justify-center"><CalcIcon className="h-5 w-5" /></span>
             {!collapsed ? <span className="flex-1">Calculator</span> : null}
             {!collapsed ? (
               <span className="text-[10px] font-extrabold text-[var(--dim)]">{calcOpen ? "ON" : ""}</span>
@@ -2225,7 +2246,7 @@ export function App() {
             title="Calculator"
             onClick={() => setCalcOpen((o) => !o)}
           >
-            <span aria-hidden>🧮</span>
+            <CalcIcon className="h-5 w-5" />
           </button>
           <button
             type="button"
@@ -2356,7 +2377,7 @@ export function App() {
             </span>
             <span className="-mt-2.5">Add</span>
           </button>
-          {[NAV[2]!].map((n) => (
+          {[NAV.find((n) => n.route === "money-tools")!].map((n) => (
             <button
               key={n.route}
               type="button"
@@ -2406,14 +2427,6 @@ export function App() {
               </button>
               <button
                 type="button"
-                onClick={() => go("savings")}
-                className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold"
-              >
-                <span aria-hidden className="mr-2">🪙</span>
-                Add to savings
-              </button>
-              <button
-                type="button"
                 aria-expanded={calcOpen}
                 onClick={() => {
                   setMoreOpen(false);
@@ -2421,7 +2434,7 @@ export function App() {
                 }}
                 className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold"
               >
-                <span aria-hidden className="mr-2">🧮</span>
+                <span aria-hidden className="mr-2 inline-flex align-middle"><CalcIcon className="h-5 w-5" /></span>
                 Calculator
               </button>
               <button
@@ -2476,30 +2489,7 @@ export function App() {
                 )}
               </div>
             </div>
-            {personal ? (
-              <p className="px-1 pb-1.5 text-[11px] font-bold text-[var(--dim)]">
-                Business tools are quieter in everyday modes — they still work exactly the same.
-              </p>
-            ) : null}
             <div className="grid grid-cols-2 gap-1.5">
-              {NAV.slice(3).map((n) => (
-                <button
-                  key={n.route}
-                  type="button"
-                  onClick={() => go(n.route)}
-                  className={`rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left text-sm font-bold ${
-                    route === n.route ? "text-[var(--accent)] ring-1 ring-[var(--accent)]/40" : ""
-                  } ${personal && n.group === "business" ? "opacity-70" : ""}`}
-                >
-                  <span aria-hidden className="mr-2">{n.icon}</span>
-                  {n.label}
-                  {personal && n.group === "business" ? (
-                    <span className="ml-1.5 rounded-full bg-[var(--surface-soft)] px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-[var(--dim)]">
-                      Business
-                    </span>
-                  ) : null}
-                </button>
-              ))}
               <button
                 type="button"
                 onClick={() => go("settings")}
