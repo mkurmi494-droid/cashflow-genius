@@ -14,6 +14,11 @@
 // (17+) effectiveReplyKind: a model "confirm" with a safe add plan
 // executes at once (owner's decision, 2026-11-20), with a delete it
 // still waits, and a plan on a "chat" reply never executes.
+// (18) edit_transaction (owner's report, 2026-11-20 — "1000 nahi,
+// 1500 karo" must change the entry, never add a second one): a
+// correction normalizes, needs no confirm, executes at once, and
+// rejects no-matcher / no-change / bad amounts / bad dates; the
+// match date defaults to today and a nested edit plan unwraps.
 // Run: node scripts/home-chat-test.mjs   (exit 1 on any failure)
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -309,6 +314,141 @@ check(
     ).plan,
   ),
   "action",
+);
+
+// (18) edit_transaction — Sarya's correction: "1000 nahi, 1500 karo"
+const edit = mod.normalizeHomeChatPlan(
+  {
+    kind: "edit_transaction",
+    matchType: "expense",
+    matchAmountCents: 100000,
+    matchCategory: "Food & groceries",
+    matchDescription: "",
+    matchDate: "2026-11-20",
+    amountCents: 150000,
+    category: null,
+    description: null,
+    date: null,
+  },
+  TODAY,
+);
+check("edit_transaction normalizes (1000 -> 1500 correction)", edit, {
+  ok: true,
+  plan: {
+    kind: "edit_transaction",
+    matchType: "expense",
+    matchAmountCents: 100000,
+    matchCategory: "Food & groceries",
+    matchDescription: "",
+    matchDate: "2026-11-20",
+    amountCents: 150000,
+    category: null,
+    description: null,
+    date: null,
+  },
+});
+check("edit_transaction does NOT need confirm", mod.planNeedsConfirm(edit.plan), false);
+check(
+  'model "confirm" + edit_transaction executes at once',
+  mod.effectiveReplyKind("confirm", edit.plan),
+  "action",
+);
+check(
+  "edit_transaction with no matcher rejected",
+  mod.normalizeHomeChatPlan(
+    {
+      kind: "edit_transaction",
+      matchType: "expense",
+      matchAmountCents: null,
+      matchCategory: null,
+      matchDescription: "",
+      matchDate: "2026-11-20",
+      amountCents: 150000,
+    },
+    TODAY,
+  ).ok,
+  false,
+);
+check(
+  "edit_transaction with no change rejected",
+  mod.normalizeHomeChatPlan(
+    {
+      kind: "edit_transaction",
+      matchType: "expense",
+      matchAmountCents: 100000,
+      matchDate: "2026-11-20",
+      amountCents: null,
+      category: null,
+      description: null,
+      date: null,
+    },
+    TODAY,
+  ).ok,
+  false,
+);
+check(
+  "edit_transaction with zero new amount rejected",
+  mod.normalizeHomeChatPlan(
+    {
+      kind: "edit_transaction",
+      matchType: "expense",
+      matchAmountCents: 100000,
+      matchDate: "2026-11-20",
+      amountCents: 0,
+    },
+    TODAY,
+  ).ok,
+  false,
+);
+check(
+  "edit_transaction with impossible match date rejected",
+  mod.normalizeHomeChatPlan(
+    {
+      kind: "edit_transaction",
+      matchType: "expense",
+      matchAmountCents: 100000,
+      matchDate: "2026-02-30",
+      amountCents: 150000,
+    },
+    TODAY,
+  ).ok,
+  false,
+);
+check(
+  "edit_transaction matchDate defaults to today",
+  mod.normalizeHomeChatPlan(
+    { kind: "edit_transaction", matchType: "expense", matchAmountCents: 100000, amountCents: 150000 },
+    TODAY,
+  ).plan?.matchDate,
+  "2026-11-20",
+);
+check(
+  "edit_transaction matches by category alone",
+  mod.normalizeHomeChatPlan(
+    { kind: "edit_transaction", matchType: "expense", matchCategory: "Food", amountCents: 150000 },
+    TODAY,
+  ).ok,
+  true,
+);
+check(
+  "nested edit_transaction unwraps",
+  mod.normalizeHomeChatPlan(
+    {
+      edit_transaction: {
+        kind: "edit_transaction",
+        matchType: "expense",
+        matchAmountCents: 100000,
+        amountCents: 150000,
+      },
+    },
+    TODAY,
+  ).ok,
+  true,
+);
+check(
+  "describePlan edit_transaction",
+  mod.describePlan(edit.plan, fmt),
+  "Edit the expense on 2026-11-20 · Food & groceries · ₹1,000",
 );
 
 console.log(`\n${pass} passed, ${fail} failed`);
