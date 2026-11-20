@@ -89,7 +89,7 @@ function GoalFormModal({
         notify(`Savings goal “${name.trim()}” updated.`);
       } else if (res.mode !== activeMode) {
         notify(
-          `Savings goal “${name.trim()}” created in ${MODE_LABELS[res.mode as AppMode]} — open that workspace to see it and add money. Nothing was added here, so nothing is mixed.`,
+          `Savings goal “${name.trim()}” created in ${MODE_LABELS[res.mode as AppMode]} — open that workspace to see it.`,
         );
       } else {
         notify(`Savings goal “${name.trim()}” created in ${MODE_LABELS[activeMode]}. Add money to it whenever you're ready.`);
@@ -153,8 +153,7 @@ function GoalFormModal({
         </div>
         {editing ? (
           <p className="rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-sm font-semibold">
-            This goal lives in {MODE_LABELS[activeMode]} and stays there — editing never moves a goal
-            (or its money) between workspaces.
+            This goal lives in {MODE_LABELS[activeMode]} — editing never moves it.
             {editing.savedCents > 0
               ? ` It already holds ${fmtMoney(editing.savedCents, currency)}, so the target must stay at or above that.`
               : ""}
@@ -174,9 +173,6 @@ function GoalFormModal({
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-xs font-semibold normal-case tracking-normal text-[var(--dim)]">
-              The goal and every rupee added to it will belong to that workspace only — never mixed with the others.
-            </span>
           </Field>
         )}
         {error ? (
@@ -306,8 +302,7 @@ function MoveMoneyModal({
               This moves money from the pot back to this workspace's <strong>available cash</strong>, recorded
               once as a <strong>transfer</strong> — never as income, so the same money is never counted twice.
             </>
-          )}{" "}
-          It happens in {MODE_LABELS[modeOfGoal(goal)]} only.
+          )}
         </p>
         <p className="text-sm text-[var(--dim)]">
           In the pot now: <strong className="tnum text-[var(--text)]">{fmtMoney(goal.savedCents, currency)}</strong>
@@ -367,13 +362,6 @@ function MoveMoneyModal({
                 </button>
               ))}
             </div>
-            {frequency !== "once" ? (
-              <p className="mt-1.5 text-xs leading-relaxed text-[var(--dim)]">
-                {fmtMoney(amountCents, currency)} will move into this pot {frequency === "monthly" ? "every month" : "every year"}
-                {date <= todayStr() ? ", starting today" : `, starting ${prettyDate(date)}`} — automatically, only when
-                the workspace's available cash covers it. Cancel anytime from the goal card.
-              </p>
-            ) : null}
           </div>
         ) : null}
         <Field label="Note (optional)">
@@ -494,16 +482,16 @@ function GoalCard({
 
       <p className="mt-2 text-xs leading-relaxed text-[var(--dim)]">
         {goal.status === "completed"
-          ? "You've reached this target. You can keep adding, raise the target by editing, or withdraw the money back to available cash."
+          ? "Target reached — keep adding, raise the target, or withdraw."
           : goal.status === "overdue"
-            ? `The target date has passed with ${fmtMoney(goal.remainingCents, currency)} still to go. Edit the goal to set a new date, or keep saving — nothing is lost.`
+            ? `Target date passed with ${fmtMoney(goal.remainingCents, currency)} still to go — edit the date or keep saving.`
             : goal.status === "not_started"
-              ? "No money in this pot yet. Add your first transfer to get it moving."
+              ? "No money in this pot yet."
               : goal.status === "on_track"
                 ? goal.expectedCents > 0
-                  ? `You're on track. Saving steadily, a little at a time since this goal began, would have put about ${fmtMoney(goal.expectedCents, currency)} aside by today — and you already have ${fmtMoney(goal.savedCents, currency)}.${goal.requiredPerMonthCents > 0 ? ` Keep saving about ${fmtMoney(goal.requiredPerMonthCents, currency)} a month and you'll reach the target on time.` : ""}`
+                  ? `On track.${goal.requiredPerMonthCents > 0 ? ` — keep saving about ${fmtMoney(goal.requiredPerMonthCents, currency)}/month.` : ""}`
                   : `You've only just begun this goal, so there's no pace to compare yet.${goal.requiredPerMonthCents > 0 ? ` Saving about ${fmtMoney(goal.requiredPerMonthCents, currency)} a month from here reaches the target on time.` : ""}`
-                : `A little behind: saving steadily since this goal began would have put about ${fmtMoney(goal.expectedCents, currency)} aside by today, and you have ${fmtMoney(goal.savedCents, currency)}.${goal.requiredPerMonthCents > 0 ? ` Saving about ${fmtMoney(goal.requiredPerMonthCents, currency)} a month from here still reaches the target on time.` : ""}`}
+                : `A little behind.${goal.requiredPerMonthCents > 0 ? ` Saving about ${fmtMoney(goal.requiredPerMonthCents, currency)}/month from here still reaches the target on time.` : ""}`}
       </p>
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -560,7 +548,7 @@ function GoalCard({
       {goal.transfers.length > 0 ? (
         <div className="mt-4">
           <p className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
-            Transfers — every move in and out, recorded once
+            Transfers
           </p>
           <ul className="mt-1.5 divide-y divide-[var(--border)]">
             {transfers.map((t) => (
@@ -691,10 +679,7 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
         <div>
           <h1 className="display-font text-[27px] font-semibold tracking-tight">🪙 Savings Goals</h1>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[var(--dim)]">
-            Savings pots for {MODE_LABELS[activeMode]}. Money you add leaves this workspace's available
-            cash and sits in the pot; money you withdraw comes back. Both are recorded once as{" "}
-            <strong>transfers</strong> — never as income or spending — so your totals never double-count,
-            and savings here never mix with another workspace.
+            Savings pots for {MODE_LABELS[activeMode]}. Money you add leaves available cash and sits in the pot; withdrawing brings it back. Both are <strong>transfers</strong> — never income or spending.
           </p>
         </div>
         <button type="button" className="btn-primary shrink-0 px-5 py-3 text-sm" onClick={() => setShowForm(true)}>
@@ -705,7 +690,7 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
       <section className="card p-5 sm:p-6" aria-label="Total saved in this workspace">
         <SectionTitle
           title={`Total saved — ${MODE_LABELS[activeMode]}`}
-          hint="Across every goal in this workspace only. Other workspaces keep their own separate totals — see them side by side on the Command Center."
+          hint="Across every goal in this workspace only."
         />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <div>
@@ -728,7 +713,7 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
         <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]">
           {goals.length === 0
             ? "No goals yet in this workspace — available cash above is untouched by savings."
-            : `${goals.length} goal(s) here, ${onTrackCount} on track or reached. Available cash already excludes the ${fmtMoney(totalSaved, currency)} sitting in pots, so the money is counted exactly once: either spendable, or saved — never both.`}
+            : `${goals.length} goal(s) here, ${onTrackCount} on track or reached.`}
         </p>
       </section>
 
@@ -743,7 +728,7 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
       {goals.length === 0 ? (
         <EmptyState
           title="No savings goals yet"
-          body="Create your first pot — a name, a target amount and a date. Add money in small transfers whenever you can, and watch the progress and on-track pace update from your real transfers."
+          body="Create your first pot — a name, a target amount and a date."
           action={
             <button type="button" className="btn-primary px-5 py-2.5 text-sm" onClick={() => setShowForm(true)}>
               Create a savings goal
