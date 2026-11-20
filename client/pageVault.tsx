@@ -1018,7 +1018,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
               e.preventDefault();
               const ok = await confirm({
                 title: "Delete your account forever?",
-                body: "This is permanent and cannot be undone — there is no Undo for account deletion. Your account and every record in every workspace (Personal, Business, Creator, Student) will be deleted.",
+                body: "This is permanent and cannot be undone — there is no Undo for account deletion. Your account and every record in every workspace (Personal, Business, Creator) will be deleted.",
                 detail: "If you might want this data again, cancel now and download a full backup first (Backup, restore & undo, above).",
                 confirmLabel: "Yes, delete forever",
                 cancelLabel: "Keep my account",
