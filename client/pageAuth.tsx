@@ -67,11 +67,11 @@ const introPortraitWebm = "/assets/cashflow-intro-portrait.webm";
 // sphere, same stage timings as the fallback below. The component picks
 // the portrait sources whenever the viewport is portrait (aspect ratio
 // <= 1:1) and re-picks live if the device rotates mid-intro; the video
- // always uses object-cover, so no viewport ever shows letterbox bars.
- // Wider/landscape viewports keep the 16:9 master with object-cover
- // (vertical crop only, which never touches the horizontally-centred
- // title). The procedural fallback below is a full-screen flex scene, so
- // it fills portrait phones too.
+// always uses object-cover, so no viewport ever shows letterbox bars.
+// Wider/landscape viewports keep the 16:9 master with object-cover
+// (vertical crop only, which never touches the horizontally-centred
+// title). The procedural fallback below is a full-screen flex scene, so
+// it fills portrait phones too.
 // Reduced-motion users skip the intro entirely in App.
 // ------------------------------------------------------------------
 
@@ -407,10 +407,8 @@ function OrDivider({ label }: { label: string }) {
 // answers, and while the check is still running the rows say
 // “Checking…”, never Live. The database row used to be hardcoded
 // Live — which is how the strip claimed Live while every database
-// query was failing. Gemini is Live only when a Gemini key is
-// configured on the server; otherwise it stays Not connected and the
-// AI CFO answers with the built-in rule-based fallback. After
-// sign-in, Settings → Live connections re-checks every service in
+// query was failing. Gemini is not in use — the AI CFO runs on
+// ChatGPT. After sign-in, the strip re-checks the connection in
 // real time.
 function ConnectionStrip() {
   const sb = useQuery({
