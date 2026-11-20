@@ -308,27 +308,6 @@ export function CinematicIntro({ onDone }: { onDone: () => void }) {
 // Shared bits
 // ------------------------------------------------------------------
 
-function SetupNotice() {
-  return (
-    <p className="rounded-2xl border border-[var(--border)] bg-[var(--ai)] px-4 py-3 text-left text-xs leading-relaxed text-[var(--ai-text)]">
-      <strong>Account setup note:</strong> Two ways in, both through
-      Supabase Auth. “Continue with Google” signs you in with your own
-      Google account, into your own private workspace. Or sign up with
-      your email + a password: Supabase emails a confirmation link to
-      your own inbox (its free built-in sender — only a few emails per
-      hour, so it can occasionally ask you to wait), and you tap that
-      link to verify; the link is never shown in this app.
-      Mobile-number sign-up is not offered — there is no free SMS OTP,
-      so a phone number can never be a sign-in method here (it can be
-      saved later as an optional profile detail). Password reset for
-      email accounts isn&rsquo;t wired in-app yet, so it stays honestly
-      unavailable rather than faked — a reset code is never handed to
-      someone who merely knows your email. (Google accounts never need
-      one: Google itself verifies you.)
-    </p>
-  );
-}
-
 // ------------------------------------------------------------------
 // Continue with Google — the primary sign-in option.
 //
@@ -372,10 +351,6 @@ export function GoogleSignIn({ notify }: { notify?: (m: string) => void }) {
         </svg>
         {busy ? "Opening Google…" : "Continue with Google"}
       </button>
-      <p className="mt-2 text-center text-xs leading-relaxed text-[var(--dim)]">
-        Your own Google account, your own private workspace — new Google
-        users start empty. Sign-in runs through Supabase Auth.
-      </p>
       {error ? (
         <p
           className="mt-3 rounded-2xl bg-[var(--err)] px-4 py-3 text-left text-xs leading-relaxed font-semibold text-[var(--err-text)]"
@@ -394,116 +369,6 @@ function OrDivider({ label }: { label: string }) {
       <span className="h-px flex-1 bg-[var(--border)]" />
       <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--dim)]">{label}</span>
       <span className="h-px flex-1 bg-[var(--border)]" />
-    </div>
-  );
-}
-
-// Honest connection summary, visible before sign-in. The Supabase /
-// Google / Email rows come from a REAL server-side probe of the
-// connected Supabase project (getSupabaseAuthStatus asks Supabase Auth
-// for its own settings), and the Workspace database row comes from a
-// REAL database probe in the same call (connect + auth_users table
-// present): each is only shown Live when its own check actually
-// answers, and while the check is still running the rows say
-// “Checking…”, never Live. The database row used to be hardcoded
-// Live — which is how the strip claimed Live while every database
-// query was failing. Gemini is not in use — the AI CFO runs on
-// ChatGPT. After sign-in, the strip re-checks the connection in
-// real time.
-function ConnectionStrip() {
-  const sb = useQuery({
-    queryKey: ["cg-supabase-status"],
-    queryFn: () => api.getSupabaseAuthStatus({}),
-    staleTime: 60_000,
-    retry: 1,
-  });
-  const checking = sb.isPending;
-  const sbLive = sb.data?.reachable === true;
-  const googleLive = sb.data?.googleEnabled === true;
-  const emailLive = sb.data?.emailEnabled === true;
-  const dbLive = sb.data?.databaseLive === true;
-  const dbTablesReady = sb.data?.databaseTablesReady === true;
-  const aiLive = sb.data?.aiConfigured === true;
-  const rows: { name: string; state: "live" | "off" | "checking"; note: string }[] = [
-    {
-      name: "Workspace database",
-      state: checking ? "checking" : dbLive ? "live" : "off",
-      note: checking
-        ? "Checking the database…"
-        : dbLive
-          ? dbTablesReady
-            ? "Your records live here — database answered just now"
-            : "Database answered, but its tables aren't set up yet"
-          : sb.data?.databaseErrorCode === "28P01"
-            ? "Database didn't answer — its sign-in (DATABASE_URL password) looks wrong"
-            : sb.data?.databaseErrorCode === "42P01"
-              ? "Database answered, but its tables aren't set up yet — the setup migration needs to run"
-              : sb.data?.databaseErrorCode === "NO_DATABASE_URL"
-                ? "Database isn't configured on the server yet (DATABASE_URL is missing)"
-                : sb.data?.databaseErrorCode === "TIMEOUT"
-                  ? "Database took too long to answer the live check — try again in a moment"
-                  : "Database didn't answer the live check just now — sign-in can't work until it does",
-    },
-    {
-      name: "AI CFO engine",
-      state: checking ? "checking" : aiLive ? "live" : "off",
-      note: checking
-        ? "Checking…"
-        : aiLive
-          ? "Gemini connected — AI answers grounded in your figures"
-          : "No Gemini key — the AI CFO answers with the built-in rule-based fallback",
-    },
-    {
-      name: "Supabase",
-      state: checking ? "checking" : sbLive ? "live" : "off",
-      note: checking
-        ? "Checking with Supabase…"
-        : sbLive
-          ? "Project connected — powers Google sign-in + email verification"
-          : "Project didn't answer the live check just now",
-    },
-    {
-      name: "Google sign-in",
-      state: checking ? "checking" : googleLive ? "live" : "off",
-      note: checking
-        ? "Checking with Supabase…"
-        : googleLive
-          ? "Real Google sign-in via Supabase Auth"
-          : "Not confirmed by the live check just now",
-    },
-    {
-      name: "Email verification",
-      state: checking ? "checking" : emailLive ? "live" : "off",
-      note: checking
-        ? "Checking with Supabase…"
-        : emailLive
-          ? "Sign-up confirmation links emailed by Supabase's free sender (a few per hour)"
-          : "Not confirmed by the live check just now",
-    },
-    { name: "Google Gemini", state: "off", note: "No Gemini connection wired yet" },
-  ];
-  return (
-    <div className="rounded-2xl border border-[var(--border)] bg-white/70 px-4 py-3 text-left">
-      <p className="text-[11px] font-extrabold uppercase tracking-widest text-[var(--dim)]">
-        What’s connected
-      </p>
-      <ul className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-        {rows.map((r) => (
-          <li key={r.name} className="flex items-start gap-2 text-xs">
-            <span
-              aria-hidden
-              className={`mt-1 h-2 w-2 shrink-0 rounded-full ${r.state === "live" ? "bg-[var(--accent)]" : "bg-[#f59e0b]"}`}
-            />
-            <span>
-              <strong className="text-[var(--text)]">{r.name}</strong>{" "}
-              <span className={`font-bold ${r.state === "live" ? "text-[var(--accent)]" : "text-[var(--warn-text)]"}`}>
-                {r.state === "live" ? "Live" : r.state === "checking" ? "Checking…" : "Not connected"}
-              </span>
-              <span className="block text-[var(--dim)]">{r.note}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -612,46 +477,6 @@ export function PublicHome({
         <p className="mt-3 text-lg font-semibold text-[var(--accent)]">
           “See money before it moves.”
         </p>
-        <p className="mt-3 text-sm leading-relaxed text-[var(--dim)]">
-          One calm home for your money: see what you have, what&rsquo;s coming in
-          and going out, what&rsquo;s due, and what you&rsquo;ve saved — plus
-          invoices with GST, a future forecast, a scam check for suspicious UPI
-          messages, and an AI CFO that answers from your real numbers.
-          Everything is calculated from your own records, private to your account.
-        </p>
-        {/* Four workspaces: one column on narrow phones (a 2-up grid
-            squeezes each tile to ~145px and the copy wraps to mush),
-            two columns from 420px up. */}
-        <div className="mt-4 grid grid-cols-1 gap-2 text-left min-[420px]:grid-cols-2">
-          <div className="rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3">
-            <p className="text-sm font-extrabold">☰ Personal Money</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
-              Daily spending, income and budgets — for everyday money.
-            </p>
-          </div>
-          <div className="rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3">
-            <p className="text-sm font-extrabold">▤ Business Money</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
-              Invoices, GST, leak scanner and business reports switched on.
-            </p>
-          </div>
-          <div className="rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3">
-            <p className="text-sm font-extrabold">✦ Creator &amp; Freelancer</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
-              Client payments, brand deals and platform payouts, kept in their own workspace.
-            </p>
-          </div>
-          <div className="rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3">
-            <p className="text-sm font-extrabold">🎓 Student / First Salary</p>
-            <p className="mt-0.5 text-xs leading-relaxed text-[var(--dim)]">
-              Pocket money, part-time work and a first salary — simple and separate.
-            </p>
-          </div>
-        </div>
-        <p className="mt-2 text-center text-[11px] text-[var(--dim)]">
-          Four completely separate workspaces — you choose at sign-up, switch any time
-          in Settings, and data never mixes between them.
-        </p>
 
         {/* Sign in — Google first, then your own account. Every
             account is a real, private account that starts with an
@@ -678,20 +503,8 @@ export function PublicHome({
             Sign Up
           </button>
         </div>
-        <p className="mt-3 text-center text-xs leading-relaxed text-[var(--dim)]">
-          New here? Sign up with your email — Supabase emails you a confirmation link to
-          verify it — or just continue with Google. Your workspace starts empty,
-          with only your own records, and a short app tour shows you everything
-          right after setup. It can be skipped any time.
-        </p>
         <div className="mt-4 flex justify-center">
           <InstallButton onNotify={notify} />
-        </div>
-        <div className="mt-5">
-          <ConnectionStrip />
-        </div>
-        <div className="mt-3">
-          <SetupNotice />
         </div>
         <details className="mt-4 rounded-2xl border border-[var(--border)] bg-white/70 px-4 py-3">
           <summary className="cursor-pointer text-sm font-extrabold text-[var(--accent)]">
@@ -961,7 +774,6 @@ export function SignupScreen({
         </button>
       </p>
       <div className="mt-5 space-y-3">
-        <SetupNotice />
         <button
           type="button"
           className="btn-ghost w-full px-4 py-2 text-xs"
@@ -1117,7 +929,6 @@ export function VerifyScreen({
             Back to login
           </button>
         </div>
-        <SetupNotice />
       </div>
     </AuthCard>
   );
@@ -1251,9 +1062,6 @@ export function ForgotScreen({
           Back to login
         </button>
       </p>
-      <div className="mt-5">
-        <SetupNotice />
-      </div>
     </AuthCard>
   );
 }
