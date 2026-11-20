@@ -146,6 +146,14 @@ export function ParticleCursor() {
   useEffect(() => {
     if (style === "off") {
       document.documentElement.classList.remove("has-particle-cursor");
+      // The canvas stays in the DOM (and visible on desktop) even for
+      // "off" — only the loop is gone. Wipe its last painted frame, or
+      // the glow + trail freeze at the last mouse position forever
+      // (live, 2026-11-20: turning the cursor off left a frozen
+      // gradient blob on screen while the system arrow moved fine).
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext("2d");
+      if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
     const fine = window.matchMedia("(hover: hover) and (pointer: fine)");
@@ -404,6 +412,10 @@ export function ParticleCursor() {
 
     return () => {
       cancelAnimationFrame(raf);
+      // Wipe the last painted frame as the loop stops — otherwise the
+      // glow + trail stay frozen on the canvas at the last mouse
+      // position (the canvas itself stays mounted and visible).
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       window.removeEventListener("resize", resize);
       window.removeEventListener("pointermove", onMove);
       document.removeEventListener("mouseover", onOver);
