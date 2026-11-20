@@ -94,8 +94,8 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
       <div>
         <h3 className="text-sm font-extrabold">Your data &amp; privacy</h3>
         <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
-          Every account gets its own private data that starts empty, and each of the four money modes
-          (Personal, Business, Creator &amp; Freelancer, Student) is a completely separate
+          Every account gets its own private data that starts empty, and each of the three money modes
+          (Personal, Business, Creator &amp; Freelancer) is a completely separate
           workspace — records never mix. Full JSON backup and restore are
           built in, deletes come with Undo, and permanent account deletion is available in
           Settings — your data leaves when you say so.
