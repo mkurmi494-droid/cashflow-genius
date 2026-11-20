@@ -99,7 +99,6 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
     <section className="card p-5 sm:p-6" aria-label="Personal and Business together">
       <SectionTitle
         title="Personal + Business — together"
-        hint="Both workspaces stay saved at the same time. Use either one whenever you need it — nothing is ever mixed."
         action={
           <button
             type="button"
@@ -181,7 +180,6 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
                     {w.savingsGoalCount > 0
                       ? ` across ${w.savingsGoalCount} goal(s) in ${w.label} only`
                       : ` — no savings goals in ${w.label} yet`}
-                    . Cash above already excludes it, so it is never counted twice.
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
                     {w.upcomingCount > 0
@@ -265,10 +263,7 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
               {data.combined.overdueCount > 0
                 ? ` · ${data.combined.overdueCount} overdue item(s) totalling ${fmtMoney(data.combined.overdueCents, cur)} — check the Payment Calendar in each workspace.`
                 : "."}{" "}
-              This combined view only adds the separate totals up for an overview — every transaction,
-              budget, recurring schedule and calendar item still belongs to its own workspace and is
-              tracked there. Forecasts and reports also stay per workspace, so nothing is double-counted
-              or moved.
+              This view only adds the separate totals up — every record still belongs to its own workspace.
             </p>
             <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Switch workspace in one tap">
               {APP_MODES.map((m) => (
@@ -450,7 +445,7 @@ function GeniusInsightsPanel({ state, go, notify }: { state: PageProps["state"];
     <section className="card p-5 sm:p-6" aria-label="Genius Insights">
       <SectionTitle
         title="✦ Genius Insights"
-        hint="Things the app noticed in this workspace — checked from your real records, with no AI call. Estimates only, never predictions."
+        hint="Checked from your real records — no AI call. Estimates only, never predictions."
         action={
           <button
             type="button"
@@ -756,8 +751,8 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
             <p className="mt-4 max-w-xl text-sm leading-relaxed text-[#fbf7ea]/85">
               {state.transactions.length === 0
                 ? personal
-                  ? "Nothing recorded yet. Add your first income or daily expense with the Add button below — or take the 1-minute app tour (Settings → App tour & help) to see everything first."
-                  : "Your ledger is empty. Add your first transaction with the Add button below — or take the 1-minute app tour (Settings → App tour & help) to see everything first."
+                  ? "Nothing recorded yet — add your first income or expense below."
+                  : "Nothing recorded yet — add your first income or expense below."
                 : score >= 70
                   ? personal
                     ? "Your money is in a healthy position. Income is covering your spending and the recent trend is on your side."
@@ -876,7 +871,7 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
       <section className="card p-5 sm:p-6" aria-label="Savings in this workspace">
         <SectionTitle
           title={`🪙 Savings — ${MODE_LABELS[modeOf(state)]}`}
-          hint="Total saved across this workspace's goals. Adding or withdrawing is a transfer — never income or spending — so nothing double-counts."
+          hint="Total saved across this workspace's goals."
           action={
             <button type="button" className="btn-primary shrink-0 px-4 py-2 text-sm" onClick={() => go("savings")}>
               Open Savings
@@ -890,7 +885,7 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
           </div>
           <p className="max-w-md text-sm leading-relaxed text-[var(--dim)]">
             {state.savingsGoals.length === 0
-              ? "No savings goals yet in this workspace. Create a pot with a target amount and date, then add money in small transfers whenever you can."
+              ? "No savings goals yet — create a pot to start."
               : `Across ${state.savingsGoals.length} goal(s). Available cash (${fmtMoney(s.cashCents, cur)}) already excludes this saved money — it is set aside, not spent.`}
           </p>
         </div>
@@ -1146,7 +1141,7 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
                 <SectionTitle title="Upcoming Payments" hint="Invoices, schedules & pending items" />
                 {upcoming.length === 0 ? (
                   <p className="text-sm text-[var(--dim)]">
-                    Nothing scheduled. Add recurring cashflows in Future Lens or send an invoice.
+                    Nothing scheduled yet.
                   </p>
                 ) : (
                   <ul className="divide-y divide-[var(--border)]">
@@ -1196,46 +1191,10 @@ export function DashboardPage({ state, go, notify, confirm, onQuickAdd, onShowTo
                 </li>
               ))}
             </ul>
-            <p className="mt-3 text-xs text-[var(--dim)]">
-              Tip: use the Quick Note button anywhere to capture an idea — it lands in the Memory Vault.
-              <button type="button" className="ml-1 font-bold text-[var(--accent)] underline" onClick={() => notify("Use the floating ✎ Quick Note button at the bottom right.")}>
-                How?
-              </button>
-            </p>
           </section>
         </>
       )}
 
-      {/* How budgeting works here — explained on day one, in plain words:
-          record everything in its own workspace, give each category a
-          monthly budget, and check the week before it becomes a month. */}
-      <Reveal><section className="card p-5" aria-label="How budgeting works here">
-        <SectionTitle title="How budgeting works here" hint="The whole method, in three steps — no paywall, every report and forecast included" />
-        <ol className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <li className="rounded-2xl bg-[var(--surface-soft)] p-3.5">
-            <p className="text-sm font-extrabold">1 · Record in seconds</p>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-              Tap ＋ Add, enter the amount, pick a category and how you paid (UPI first).
-              Personal spends — rent, bills, EMI, loans, shopping — have ready-made
-              categories, and “✎ Custom” lets you add your own.
-            </p>
-          </li>
-          <li className="rounded-2xl bg-[var(--surface-soft)] p-3.5">
-            <p className="text-sm font-extrabold">2 · Give categories a limit</p>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-              Set a monthly budget per category in the {personal ? "Spending Leak Check" : "Profit Leak Scanner"}.
-              Each workspace keeps its own budgets, so personal limits never mix with business ones.
-            </p>
-          </li>
-          <li className="rounded-2xl bg-[var(--surface-soft)] p-3.5">
-            <p className="text-sm font-extrabold">3 · Check the week, then the future</p>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--dim)]">
-              Use Money Flow's “This week” view for the week, the Payment Calendar for what's
-              due, and Future Lens for what's coming — all included, nothing gated.
-            </p>
-          </li>
-        </ol>
-      </section></Reveal>
     </div>
   );
 }
