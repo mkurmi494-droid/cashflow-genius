@@ -58,6 +58,7 @@ import {
   describePlan,
   effectiveReplyKind,
   normalizeHomeChatPlan,
+  normalizeHomeChatReply,
   type HomeChatPlan,
 } from "./lib/homeChat";
 
@@ -6506,8 +6507,16 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
         .join("\n");
 
       const replySchema = z.object({
-        kind: z.enum(["chat", "action", "confirm", "clarify"]),
-        reply: z.string(),
+        // Loose on purpose: the model does not reliably return the
+        // shape the prompt asks for — live, 2026-11-21, it returned a
+        // bare plan as the whole answer (no "reply" at all) and
+        // {"kind":"action","plan":{...}} with no "reply" either, and
+        // the strict check threw three good instructions away. The
+        // strict check is normalizeHomeChatReply below, which salvages
+        // those shapes, fills a missing reply from the plan, and
+        // still rejects anything it cannot understand.
+        kind: z.string().nullish(),
+        reply: z.string().nullish(),
         question: z.string().nullish(),
         // Loose on purpose: the model often omits plan fields that
         // have no value (counterparty, note, dueDate) and sometimes
@@ -6538,7 +6547,7 @@ ${historyText || "(none)"}
 
 OWNER'S MESSAGE: ${args.message}
 
-Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action" | "confirm" | "clarify", "reply": "...", "question": "...", "plan": {...}} — omit "question" and "plan" when they do not apply.
+Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action" | "confirm" | "clarify", "reply": "...", "question": "...", "plan": {...}} — omit "question" and "plan" when they do not apply. ALWAYS include "reply" — a one-line summary of what you will do — even for "action" and "confirm". Return ONLY the JSON object: no markdown, no extra text, no trailing characters.
 - "chat": just talking or answering — no work to do. "reply" is the answer.
 - "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, edit_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
 - "confirm": ONLY when the request is a delete or a currency change. NEVER use "confirm" for an add or an edit of any kind — add_transaction, edit_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note and add_recurring always execute immediately with "action", even if you feel unsure (if a detail is genuinely missing, use "clarify" and ask instead of guessing). Put the plan in "plan" and what it does in "question". When kind is "confirm", phrase "reply" as a proposal you are asking about (for example "Shall I delete the ₹500 food expense from 20 Nov?") — NEVER write "Done" or describe the work as already finished, because nothing has happened yet.
@@ -6569,34 +6578,37 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
 
       // Never trust the model's raw shape: a fallback (or a parse
       // repair) can hand back null, and reading .reply of null used
-      // to throw a TypeError to the user (live, 2026-11-20).
-      if (!raw || typeof raw !== "object" || typeof raw.reply !== "string") {
+      // to throw a TypeError to the user (live, 2026-11-20). The
+      // normaliser salvages the shapes the model actually returns —
+      // a bare plan, or {"kind":"action","plan":{...}} with no reply
+      // (live, 2026-11-21) — and fills a missing reply from the plan.
+      if (!raw || typeof raw !== "object") {
         return {
           reply:
             "I couldn't reach the AI just now, so I haven't done anything. Your money is unchanged — try again in a bit.",
           kind: "chat" as const,
         };
       }
-      const replyText = raw.reply.trim();
-      if (!replyText)
+      const shaped = normalizeHomeChatReply(raw, today, fmt);
+      if (!shaped.ok)
         return { reply: "I didn't quite catch that — could you say it again?", kind: "clarify" as const };
-      if (!raw.plan) {
-        if (raw.kind === "clarify")
-          return { reply: replyText, kind: "clarify" as const, question: raw.question ?? replyText };
+      const replyText = shaped.reply;
+      if (!shaped.plan) {
+        if (shaped.kind === "clarify")
+          return { reply: replyText, kind: "clarify" as const, question: shaped.question ?? replyText };
         return { reply: replyText, kind: "chat" as const };
       }
-      const norm = normalizeHomeChatPlan(raw.plan, today);
-      if (!norm.ok)
+      if (shaped.planError)
         return {
-          reply: `${replyText} One thing I couldn't pin down: ${norm.error} Could you confirm it?`,
+          reply: `${replyText} One thing I couldn't pin down: ${shaped.planError} Could you confirm it?`,
           kind: "clarify" as const,
-          question: norm.error,
+          question: shaped.planError,
         };
-      const plan = norm.plan;
+      const plan = shaped.plan;
       // Only a delete or a currency change waits for a confirm tap.
       // Every safe add plan executes at once, even when the model
       // hedged with kind "confirm" (live, 2026-11-20).
-      const effective = effectiveReplyKind(raw.kind, plan);
+      const effective = effectiveReplyKind(shaped.kind, plan);
       if (effective === "confirm") {
         let match: { id: string; label: string } | null = null;
         if (plan.kind === "delete_transaction") {
@@ -6612,7 +6624,7 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
         return {
           reply: replyText,
           kind: "confirm" as const,
-          question: raw.question ?? "Shall I go ahead with this?",
+          question: shaped.question ?? "Shall I go ahead with this?",
           confirm: { plan, summary: describePlan(plan, fmt), match },
         };
       }
