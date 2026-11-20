@@ -24,6 +24,10 @@
 //   food" in an empty workspace, and the expense never appeared).
 //   Only delete_transaction and change_currency wait. If a detail
 //   is genuinely missing, the model must use "clarify", not "confirm".
+// - CORRECTIONS (owner's report, 2026-11-20): when the owner fixes
+//   what they just said ("1000 nahi, 1500 karo"), the model returns
+//   edit_transaction — the executor finds the one matching entry and
+//   updates it in place. A correction NEVER creates a second entry.
 
 export const HOME_CHAT_MAX_CENTS = 100_000_000_00;
 
@@ -78,6 +82,18 @@ export type HomeChatPlan =
       date: string;
       type: "income" | "expense";
       description: string;
+    }
+  | {
+      kind: "edit_transaction";
+      matchType: "income" | "expense";
+      matchAmountCents: number | null;
+      matchCategory: string | null;
+      matchDescription: string;
+      matchDate: string;
+      amountCents: number | null;
+      category: string | null;
+      description: string | null;
+      date: string | null;
     }
   | { kind: "change_currency"; currency: string };
 
@@ -184,6 +200,7 @@ const PLAN_KINDS = new Set([
   "add_note",
   "add_recurring",
   "delete_transaction",
+  "edit_transaction",
   "change_currency",
 ]);
 
@@ -280,6 +297,65 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
     if (!nextDate) return fail("Recurring entry needs a real next date.");
     return { ok: true, plan: { kind, type, category, description, amountCents, frequency, nextDate } };
   }
+  if (kind === "edit_transaction") {
+    const matchType = raw.matchType === "income" || raw.matchType === "expense" ? raw.matchType : null;
+    const matchAmountCents =
+      raw.matchAmountCents === null || raw.matchAmountCents === undefined
+        ? null
+        : asCents(raw.matchAmountCents);
+    const matchCategory =
+      raw.matchCategory === null || raw.matchCategory === undefined
+        ? null
+        : asTrimmed(raw.matchCategory, 60);
+    const matchDescription = asOptionalText(raw.matchDescription, 200);
+    const matchDate =
+      typeof raw.matchDate === "string" && raw.matchDate.trim().length > 0
+        ? resolveChatDate(raw.matchDate, today)
+        : today;
+    const amountCents =
+      raw.amountCents === null || raw.amountCents === undefined ? null : asCents(raw.amountCents);
+    const category =
+      raw.category === null || raw.category === undefined ? null : asTrimmed(raw.category, 60);
+    const description =
+      raw.description === null || raw.description === undefined
+        ? null
+        : asOptionalText(raw.description, 200) || null;
+    const date =
+      raw.date === null || raw.date === undefined
+        ? null
+        : typeof raw.date === "string"
+          ? resolveChatDate(raw.date, today)
+          : null;
+    if (!matchType) return fail("Edit needs income or expense to match.");
+    if (raw.matchAmountCents !== null && raw.matchAmountCents !== undefined && matchAmountCents === null)
+      return fail("Edit match amount is not a positive amount.");
+    if (!matchAmountCents && !matchCategory && !matchDescription)
+      return fail("Edit needs something to match — an amount, a category or a description.");
+    if (!matchDate) return fail("Edit match date is not a real date.");
+    if (raw.amountCents !== null && raw.amountCents !== undefined && amountCents === null)
+      return fail("Edit needs a positive new amount.");
+    if (raw.category !== null && raw.category !== undefined && !category)
+      return fail("Edit category is empty.");
+    if (raw.date !== null && raw.date !== undefined && !date)
+      return fail("Edit date is not a real date.");
+    if (amountCents === null && category === null && description === null && date === null)
+      return fail("Edit needs at least one change — a new amount, category, description or date.");
+    return {
+      ok: true,
+      plan: {
+        kind,
+        matchType,
+        matchAmountCents,
+        matchCategory,
+        matchDescription,
+        matchDate,
+        amountCents,
+        category,
+        description,
+        date,
+      },
+    };
+  }
   if (kind === "delete_transaction") {
     const type = raw.type === "income" || raw.type === "expense" ? raw.type : null;
     const amountCents = asCents(raw.amountCents);
@@ -317,6 +393,8 @@ export function describePlan(plan: HomeChatPlan, fmt: (cents: number) => string)
       return `Save a note: "${plan.text.slice(0, 80)}${plan.text.length > 80 ? "…" : ""}"`;
     case "add_recurring":
       return `Add a ${plan.frequency} ${plan.type} of ${fmt(plan.amountCents)} · ${plan.category} · from ${plan.nextDate}`;
+    case "edit_transaction":
+      return `Edit the ${plan.matchType} on ${plan.matchDate}${plan.matchCategory ? ` · ${plan.matchCategory}` : ""}${plan.matchAmountCents ? ` · ${fmt(plan.matchAmountCents)}` : ""}`;
     case "delete_transaction":
       return `Delete the ${plan.type} of ${fmt(plan.amountCents)} on ${plan.date}${plan.description ? ` (${plan.description})` : ""}`;
     case "change_currency":
