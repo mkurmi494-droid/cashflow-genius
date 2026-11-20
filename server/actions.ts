@@ -58,27 +58,25 @@ function todayStr(): string {
 }
 
 // ---------- money modes = separate workspaces ----------
-// Every account has up to four fully separate workspaces, one per money
+// Every account has up to three fully separate workspaces, one per money
 // mode. Each record row carries the `mode` of its workspace; all reads
 // and writes are scoped to the account's ACTIVE workspace, so data is
 // never mixed between modes. Switching modes only moves the pointer in
 // user_workspace_state — it never creates, moves or deletes a record.
 
-export const APP_MODES = ["business", "personal", "creator", "student"] as const;
+export const APP_MODES = ["business", "personal", "creator"] as const;
 export type AppModeT = (typeof APP_MODES)[number];
 
 export const MODE_LABELS: Record<AppModeT, string> = {
   business: "Business Money",
   personal: "Personal Money",
   creator: "Creator & Freelancer",
-  student: "Student / First Salary",
 };
 
 const MODE_DEFAULT_NAMES: Record<AppModeT, string> = {
   business: "My Business",
   personal: "My Money",
   creator: "My Creator Studio",
-  student: "My Student Budget",
 };
 
 function asMode(v: string): AppModeT {
@@ -1291,7 +1289,7 @@ function savingsGoalOut(
 // ---------- zod shapes ----------
 
 const businessShape = z.object({
-  mode: z.enum(["business", "personal", "creator", "student"]),
+  mode: z.enum(["business", "personal", "creator"]),
   name: z.string(),
   industry: z.string(),
   country: z.string(),
@@ -1947,11 +1945,11 @@ export const Actions = {
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
       business: businessShape,
-      activeMode: z.enum(["business", "personal", "creator", "student"]),
+      activeMode: z.enum(["business", "personal", "creator"]),
       cursorStyle: z.enum(["blue", "gradient", "minimal", "mint", "off"]),
       workspaces: z.array(
         z.object({
-          mode: z.enum(["business", "personal", "creator", "student"]),
+          mode: z.enum(["business", "personal", "creator"]),
           name: z.string(),
           onboarded: z.boolean(),
         }),
@@ -2244,7 +2242,7 @@ export const Actions = {
       "Saves the active workspace's profile and preferences (name, industry, country, currency, opening balance, timezone, owner, GST settings). When a mode is given, that mode's workspace is the one saved and made active. When the currency changes, every amount in that workspace is first converted to the new currency at the live exchange rate — if the rate cannot be fetched, nothing is changed at all.",
     request: z.object({
       token: z.string().max(200).optional(),
-      mode: z.enum(["business", "personal", "creator", "student"]).optional(),
+      mode: z.enum(["business", "personal", "creator"]).optional(),
       name: z.string().max(120),
       industry: z.string().max(80),
       country: z.string().max(60),
@@ -2475,10 +2473,10 @@ export const Actions = {
 
   setMode: defineAction({
     description:
-      "Switches the account's active money-mode workspace (Business Money, Personal Money, Creator & Freelancer, or Student / First Salary). Each mode is a completely separate workspace with its own records and settings; switching only changes which workspace is open — no record is ever moved, merged or deleted.",
+      "Switches the account's active money-mode workspace (Business Money, Personal Money, or Creator & Freelancer). Each mode is a completely separate workspace with its own records and settings; switching only changes which workspace is open — no record is ever moved, merged or deleted.",
     request: z.object({
       token: z.string().max(200).optional(),
-      mode: z.enum(["business", "personal", "creator", "student"]),
+      mode: z.enum(["business", "personal", "creator"]),
     }),
     response: z.object({ ok: z.literal(true), mode: z.string() }),
     async handler(ctx, args): Promise<{ ok: true; mode: string }> {
@@ -2543,14 +2541,14 @@ export const Actions = {
 
   getCombinedSummary: defineAction({
     description:
-      "Returns per-workspace totals for every money mode (Personal, Business, Creator, Student) plus a combined overview, without changing the active workspace. Each workspace is read separately — records are never merged; the combined figures are only the sum of the separate totals for display.",
+      "Returns per-workspace totals for every money mode (Personal, Business, Creator) plus a combined overview, without changing the active workspace. Each workspace is read separately — records are never merged; the combined figures are only the sum of the separate totals for display.",
     request: z.object({ token: z.string().max(200).optional() }),
     response: z.object({
-      activeMode: z.enum(["business", "personal", "creator", "student"]),
+      activeMode: z.enum(["business", "personal", "creator"]),
       currency: z.string(),
       workspaces: z.array(
         z.object({
-          mode: z.enum(["business", "personal", "creator", "student"]),
+          mode: z.enum(["business", "personal", "creator"]),
           label: z.string(),
           name: z.string(),
           exists: z.boolean(),
@@ -2753,14 +2751,14 @@ export const Actions = {
 
   saveSavingsGoal: defineAction({
     description:
-      "Creates or edits a Savings Goal / Pot in one workspace (Personal, Business, Creator or Student). The goal stores only its name, target amount and target date; money in the pot is tracked separately as transfers, so editing a goal never moves or double-counts money.",
+      "Creates or edits a Savings Goal / Pot in one workspace (Personal, Business or Creator). The goal stores only its name, target amount and target date; money in the pot is tracked separately as transfers, so editing a goal never moves or double-counts money.",
     request: z.object({
       token: z.string().max(200).optional(),
       id: z.string().optional(),
       name: z.string().min(1).max(120),
       targetCents: z.number().int().positive().max(100_000_000_00),
       targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      mode: z.enum(["business", "personal", "creator", "student"]).optional(),
+      mode: z.enum(["business", "personal", "creator"]).optional(),
     }),
     response: z.object({ id: z.string(), mode: z.string() }),
     async handler(ctx, args) {
@@ -3526,7 +3524,7 @@ export const Actions = {
       exportedAt: z.string(),
       workspaces: z.array(
         z.object({
-          mode: z.enum(["business", "personal", "creator", "student"]),
+          mode: z.enum(["business", "personal", "creator"]),
           business: businessShape,
           transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable() })),
           invoices: z.array(invoiceShape),
@@ -3627,7 +3625,7 @@ export const Actions = {
         version: z.number(),
         workspaces: z.array(
           z.object({
-            mode: z.enum(["business", "personal", "creator", "student"]),
+            mode: z.enum(["business", "personal", "creator"]),
             transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable().optional() })).max(5000),
             invoices: z.array(invoiceShape).max(1000),
             notes: z.array(noteShape).max(2000),
@@ -5478,12 +5476,10 @@ export const Actions = {
       const overdue = invs.filter((i) => effectiveStatus(i) === "overdue");
       const fmt = (c: number) =>
         `${business.currency} ${(c / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-      const personal = business.mode === "personal" || business.mode === "student";
+      const personal = business.mode === "personal";
       const modeNote =
         business.mode === "personal"
           ? " — this is a Personal Money workspace, so speak about everyday money: income, daily spending and what is left over, not business profit"
-          : business.mode === "student"
-            ? " — this is a Student / First Salary workspace, so speak simply about a student's money: pocket money or first salary coming in, fees and daily spending, and small savings, not business profit"
             : business.mode === "creator"
               ? " — this is a Creator & Freelancer workspace, so speak about creator/freelance money: client payments, brand deals, platform payouts, project expenses and money set aside for tax"
               : "";
@@ -5669,12 +5665,10 @@ export const Actions = {
         `Next 30 days (to ${in30}): pay ${fmt(duePayTotal)}, collect ${fmt(dueCollectTotal)} across ${dues.length} dated item(s) — projected cash if all settle: ${fmt(projected30)}`,
         ...duesLines,
       ];
-      const personalMode = business.mode === "personal" || business.mode === "student";
+      const personalMode = business.mode === "personal";
       const cfoFraming =
         business.mode === "personal"
           ? "This workspace is Personal Money: frame answers around everyday money — income, daily spending, budgets and what is left over — rather than business profit, while still using the exact figures below."
-          : business.mode === "student"
-            ? "This workspace is Student / First Salary: frame answers simply around a student's money — pocket money, part-time or first salary income, fees, daily spending and small savings — while still using the exact figures below."
             : business.mode === "creator"
               ? "This workspace is Creator & Freelancer: frame answers around creator/freelance money — client payments, brand deals, platform payouts, project expenses and tax set-aside — while still using the exact figures below."
               : "";
