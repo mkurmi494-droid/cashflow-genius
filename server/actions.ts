@@ -6414,8 +6414,14 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
       const replySchema = z.object({
         kind: z.enum(["chat", "action", "confirm", "clarify"]),
         reply: z.string(),
-        question: z.string().optional(),
-        plan: homeChatPlanZod.optional(),
+        question: z.string().nullish(),
+        // Loose on purpose: the model often omits plan fields that
+        // have no value (counterparty, note, dueDate). The strict
+        // check is normalizeHomeChatPlan below, which fills the
+        // defaults or rejects with a reason. A strict plan shape here
+        // used to fail the whole parse whenever one field was missing
+        // (live, 2026-11-20) and the fallback then returned null.
+        plan: z.object({ kind: z.string() }).passthrough().nullish(),
       });
       let raw: z.infer<typeof replySchema>;
       try {
@@ -6465,7 +6471,17 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
         };
       }
 
-      const replyText = typeof raw.reply === "string" && raw.reply.trim() ? raw.reply.trim() : "";
+      // Never trust the model's raw shape: a fallback (or a parse
+      // repair) can hand back null, and reading .reply of null used
+      // to throw a TypeError to the user (live, 2026-11-20).
+      if (!raw || typeof raw !== "object" || typeof raw.reply !== "string") {
+        return {
+          reply:
+            "I couldn't reach the AI just now, so I haven't done anything. Your money is unchanged — try again in a bit.",
+          kind: "chat" as const,
+        };
+      }
+      const replyText = raw.reply.trim();
       if (!replyText)
         return { reply: "I didn't quite catch that — could you say it again?", kind: "clarify" as const };
       if (!raw.plan) {
