@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import {
 APP_MODES,
@@ -19,6 +19,17 @@ type SavingsGoal,
 import type { PageProps } from "./types";
 import { Badge, EmptyState, Field, Modal, SectionTitle } from "./components";
 import { AnimatedMoney, AnimatedProgress } from "./anim";
+
+// One recurring savings schedule, as getSavingsSchedules returns it.
+type Schedule = {
+  id: string;
+  goalId: string;
+  goalName: string;
+  frequency: "once" | "monthly" | "yearly";
+  amountCents: number;
+  nextDueDate: string;
+  active: boolean;
+};
 
 function statusTone(status: string): "mint" | "gold" | "err" | "grey" | "ai" {
   switch (status) {
@@ -199,6 +210,9 @@ function MoveMoneyModal({
   const [date, setDate] = useState(todayStr());
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Deposit only: just once (the usual transfer), or a recurring
+  // schedule that moves the amount every month / every year.
+  const [frequency, setFrequency] = useState<"once" | "monthly" | "yearly">("once");
   const amountCents = Math.round((parseFloat(amount) || 0) * 100);
   const deposit = direction === "deposit";
 
@@ -223,6 +237,35 @@ function MoveMoneyModal({
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
+  // Recurring deposit: creates the schedule; the server applies the
+  // first contribution immediately when the start date is today or
+  // past (and the workspace's available cash covers it).
+  const schedule = useMutation({
+    mutationFn: async () => {
+      const res = await api.createSavingsSchedule({
+        goalId: goal.id,
+        frequency: frequency as "monthly" | "yearly",
+        amountCents,
+        startDate: date,
+      });
+      if (!res.ok) throw new Error(res.error ?? "That schedule could not be created.");
+      return res;
+    },
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+      void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
+      void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+      const every = frequency === "monthly" ? "every month" : "every year";
+      notify(
+        res.firstApplied
+          ? `${fmtMoney(amountCents, currency)} moved into “${goal.name}” now, and will move again ${every}. Cancel it anytime from the goal card.`
+          : `${fmtMoney(amountCents, currency)} will move into “${goal.name}” ${every}, starting ${prettyDate(date)}. It only moves when the workspace's available cash covers it — cancel it anytime from the goal card.`,
+      );
+      onClose();
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
   return (
     <Modal title={deposit ? `Add money to “${goal.name}”` : `Withdraw from “${goal.name}”`} onClose={onClose}>
       <form
@@ -234,11 +277,20 @@ function MoveMoneyModal({
           if (!deposit && amountCents > goal.savedCents)
             return setError(`This pot holds ${fmtMoney(goal.savedCents, currency)} — you can't withdraw more than that.`);
           if (!date) return setError("Pick the date of this transfer.");
-          move.mutate();
+          if (deposit && frequency !== "once") schedule.mutate();
+          else move.mutate();
         }}
       >
         <p className="rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-sm leading-relaxed">
-          {deposit ? (
+          {deposit && frequency !== "once" ? (
+            <>
+              This sets up a recurring move: <strong>{fmtMoney(amountCents, currency) || "this amount"}</strong>{" "}
+              moves from this workspace's <strong>available cash</strong> into the pot{" "}
+              <strong>{frequency === "monthly" ? "every month" : "every year"}</strong>
+              {date <= todayStr() ? ", starting today" : `, starting ${prettyDate(date)}`} — automatically, and
+              only when the available cash covers it. It is still a <strong>transfer</strong>, never an expense.
+            </>
+          ) : deposit ? (
             <>
               This moves money from this workspace's <strong>available cash</strong> into the pot, recorded
               once as a <strong>transfer</strong> — never as an expense, so your spending totals stay true.
@@ -276,7 +328,7 @@ function MoveMoneyModal({
               required
             />
           </Field>
-          <Field label="Date">
+          <Field label={deposit && frequency !== "once" ? "Start date" : "Date"}>
             <input
               className="field"
               type="date"
@@ -287,6 +339,37 @@ function MoveMoneyModal({
             />
           </Field>
         </div>
+        {deposit ? (
+          <div>
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">How often?</span>
+            <div className="grid grid-cols-3 gap-1 rounded-full border border-[var(--border)] bg-white p-1" role="group" aria-label="How often should this amount move into the pot">
+              {(
+                [
+                  { key: "once", label: "Just once" },
+                  { key: "monthly", label: "Monthly" },
+                  { key: "yearly", label: "Yearly" },
+                ] as const
+              ).map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setFrequency(f.key)}
+                  aria-pressed={frequency === f.key}
+                  className={`rounded-full px-2 py-2 text-xs font-bold ${frequency === f.key ? "bg-[var(--accent)] text-white" : "text-[var(--dim)]"}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            {frequency !== "once" ? (
+              <p className="mt-1.5 text-xs leading-relaxed text-[var(--dim)]">
+                {fmtMoney(amountCents, currency)} will move into this pot {frequency === "monthly" ? "every month" : "every year"}
+                {date <= todayStr() ? ", starting today" : `, starting ${prettyDate(date)}`} — automatically, only when
+                the workspace's available cash covers it. Cancel anytime from the goal card.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <Field label="Note (optional)">
           <input
             className="field"
@@ -302,12 +385,16 @@ function MoveMoneyModal({
             {error}
           </p>
         ) : null}
-        <button type="submit" className="btn-primary w-full px-6 py-3 text-sm" disabled={move.isPending}>
+        <button type="submit" className="btn-primary w-full px-6 py-3 text-sm" disabled={move.isPending || schedule.isPending}>
           {move.isPending
             ? "Recording transfer…"
-            : deposit
-              ? `Add ${amountCents > 0 ? fmtMoney(amountCents, currency) : ""} to the pot`
-              : `Withdraw ${amountCents > 0 ? fmtMoney(amountCents, currency) : ""} to available cash`}
+            : schedule.isPending
+              ? "Setting up…"
+              : deposit && frequency !== "once"
+                ? `Save ${frequency === "monthly" ? "monthly" : "yearly"} — ${amountCents > 0 ? fmtMoney(amountCents, currency) : ""}`
+                : deposit
+                  ? `Add ${amountCents > 0 ? fmtMoney(amountCents, currency) : ""} to the pot`
+                  : `Withdraw ${amountCents > 0 ? fmtMoney(amountCents, currency) : ""} to available cash`}
         </button>
       </form>
     </Modal>
@@ -325,17 +412,23 @@ function modeOfGoal(goal: SavingsGoal): AppMode {
 function GoalCard({
   goal,
   currency,
+  schedules,
   onMove,
   onEdit,
   onDelete,
+  onCancelSchedule,
 }: {
   goal: SavingsGoal;
   currency: string;
+  schedules: Schedule[];
   onMove: (goal: SavingsGoal, direction: "deposit" | "withdraw") => void;
   onEdit: (goal: SavingsGoal) => void;
   onDelete: (goal: SavingsGoal) => void;
+  onCancelSchedule: (scheduleId: string) => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
+  // Two-tap cancel for a schedule: first tap arms it, second confirms.
+  const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const pct = Math.min(100, Math.max(0, goal.progressPct));
   const transfers = showHistory ? goal.transfers : goal.transfers.slice(0, 3);
   return (
@@ -427,6 +520,37 @@ function GoalCard({
         </button>
       </div>
 
+      {schedules.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          <p className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">Recurring savings</p>
+          {schedules.map((s) => (
+            <div key={s.id} className="flex items-center justify-between gap-2 rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-sm">
+              <span>
+                <span className="font-bold">
+                  🔁 {fmtMoney(s.amountCents, currency)}{" "}
+                  {s.frequency === "once" ? "once" : s.frequency === "monthly" ? "monthly" : "yearly"}
+                </span>
+                <span className="block text-xs text-[var(--dim)]">Next: {prettyDate(s.nextDueDate)}</span>
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-xs font-bold text-[var(--accent)] underline"
+                onClick={() => {
+                  if (confirmCancelId === s.id) {
+                    setConfirmCancelId(null);
+                    onCancelSchedule(s.id);
+                  } else {
+                    setConfirmCancelId(s.id);
+                  }
+                }}
+              >
+                {confirmCancelId === s.id ? "Tap again to cancel" : "Cancel"}
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {goal.transfers.length > 0 ? (
         <div className="mt-4">
           <p className="text-xs font-extrabold uppercase tracking-wide text-[var(--dim)]">
@@ -484,6 +608,52 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
   const [editing, setEditing] = useState<SavingsGoal | null>(null);
   const [moving, setMoving] = useState<{ goal: SavingsGoal; direction: "deposit" | "withdraw" } | null>(null);
   const [deleting, setDeleting] = useState<SavingsGoal | null>(null);
+
+  // Recurring schedules for this workspace, and the due ones applied
+  // on load (there is no background job — opening the app is what
+  // moves scheduled money). The apply is idempotent: a second call
+  // finds nothing due, so the dashboard firing it too is harmless.
+  const schedulesQ = useQuery({
+    queryKey: ["cg-savings-schedules"],
+    queryFn: () => api.getSavingsSchedules({}),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const schedules = schedulesQ.data?.schedules ?? [];
+  const [applyResult, setApplyResult] = useState<{ applied: number; skipped: number } | null>(null);
+  const appliedRef = useRef(false);
+  const applyMut = useMutation({
+    mutationFn: () => api.applyDueSavingsSchedules({}),
+    onSuccess: (res) => {
+      setApplyResult({ applied: res.applied.length, skipped: res.skipped.length });
+      if (res.applied.length > 0) {
+        void queryClient.invalidateQueries({ queryKey: ["cg-state"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
+        void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+        const total = res.applied.reduce((s, a) => s + a.amountCents, 0);
+        notify(
+          res.applied.length === 1
+            ? `Scheduled savings applied: ${fmtMoney(total, currency)} moved into “${res.applied[0]?.goalName}”.`
+            : `Scheduled savings applied: ${fmtMoney(total, currency)} moved into ${res.applied.length} pots.`,
+        );
+      }
+    },
+  });
+  useEffect(() => {
+    if (appliedRef.current) return;
+    appliedRef.current = true;
+    applyMut.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const cancelScheduleMut = useMutation({
+    mutationFn: (id: string) => api.cancelSavingsSchedule({ id }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+      notify("Recurring savings cancelled — money already in the pot stays there.");
+    },
+    onError: (e) => notify(e instanceof Error ? e.message : String(e)),
+  });
 
   const deleteMut = useMutation({
     mutationFn: async (goal: SavingsGoal) => {
@@ -553,6 +723,14 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
         </p>
       </section>
 
+      {applyResult && applyResult.skipped > 0 ? (
+        <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
+          {applyResult.skipped === 1
+            ? "One scheduled saving could not move — the workspace's available cash doesn't cover it. The schedule stays due; add money or cancel it from the goal card."
+            : `${applyResult.skipped} scheduled savings could not move — the workspace's available cash doesn't cover them. The schedules stay due; add money or cancel them from the goal cards.`}
+        </p>
+      ) : null}
+
       {goals.length === 0 ? (
         <EmptyState
           title="No savings goals yet"
@@ -570,9 +748,11 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
               key={goal.id}
               goal={goal}
               currency={currency}
+              schedules={schedules.filter((s) => s.goalId === goal.id && s.active)}
               onMove={(g, direction) => setMoving({ goal: g, direction })}
               onEdit={(g) => setEditing(g)}
               onDelete={(g) => setDeleting(g)}
+              onCancelSchedule={(id) => cancelScheduleMut.mutate(id)}
             />
           ))}
         </div>
@@ -608,11 +788,11 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
       {deleting ? (
         <Modal title="Delete this savings goal?" onClose={() => setDeleting(null)}>
           <p className="text-sm leading-relaxed text-[var(--dim)]">
-            “{deleting.name}” and its transfer history will be removed from {MODE_LABELS[activeMode]}.
+            “{deleting.name}” and its transfer history and recurring schedules will be removed from {MODE_LABELS[activeMode]}.
             {deleting.savedCents > 0
               ? ` The ${fmtMoney(deleting.savedCents, currency)} in the pot goes back to this workspace's available cash — it isn't lost and it isn't counted as income.`
               : ""}{" "}
-            No other goal, transaction or workspace is touched. You can undo it right after from the Undo button — the pot and its transfers come back exactly as they were.
+            No other goal, transaction or workspace is touched. You can undo it right after from the Undo button — the pot, its transfers and its schedules come back exactly as they were.
           </p>
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" className="btn-ghost px-4 py-2 text-sm" onClick={() => setDeleting(null)}>
