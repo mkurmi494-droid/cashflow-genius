@@ -13,6 +13,7 @@ VerifyScreen,
 } from "./pageAuth";
 import type { Route } from "./types";
 import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, currencyConfirmOptions, fmtMoney, isPersonalLike, modeOf, todayStr, workspaceHasMoney, type AppMode, type State } from "./lib";
+import { CurrencyPicker, currencyMeta } from "./currencyPicker";
 import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { DashboardPage } from "./pageDashboard";
 import { AiCfoPage } from "./pageCfo";
@@ -82,6 +83,7 @@ function Welcome({
   const [bizName, setBizName] = useState("");
   const [industry, setIndustry] = useState("");
   const [opening, setOpening] = useState("0");
+  const [currency, setCurrency] = useState("INR");
   const personal = isPersonalLike(appMode);
   const creator = appMode === "creator";
   const defaultSpaceName =
@@ -94,7 +96,7 @@ function Welcome({
         name: personal ? bizName.trim() || defaultSpaceName : bizName,
         industry: personal ? "" : industry,
         country: "India",
-        currency: "INR",
+        currency,
         openingBalanceCents: Math.round((parseFloat(opening) || 0) * 100),
         timezone: "Asia/Kolkata",
         ownerName,
@@ -207,13 +209,17 @@ function Welcome({
           )}
           <label className="block">
             <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">
-              {personal ? "Money you have right now (₹)" : "Opening cash balance (₹)"}
+              {personal ? `Money you have right now (${currencyMeta(currency).symbol})` : `Opening cash balance (${currencyMeta(currency).symbol})`}
             </span>
-            <input className="field" type="number" step="1" value={opening} onChange={(e) => setOpening(e.target.value)} aria-label="Opening cash balance in rupees" />
+            <input className="field" type="number" step="1" value={opening} onChange={(e) => setOpening(e.target.value)} aria-label={`Opening cash balance in ${currency}`} />
           </label>
+          <div>
+            <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">Currency</span>
+            <CurrencyPicker value={currency} onChange={setCurrency} />
+          </div>
         </div>
         <p className="mt-4 text-xs text-[var(--dim)]">
-          Defaults: India, INR, Indian numbering. Everything — including this mode —
+          Defaults: India, Indian numbering. Everything — including this mode —
           can be changed later in Settings.
         </p>
         <button type="submit" className="btn-primary mt-4 w-full px-6 py-3 text-sm" disabled={finish.isPending}>
@@ -1719,17 +1725,12 @@ export function App() {
           </div>
           <label className="hidden items-center gap-1.5 sm:flex">
             <span className="sr-only">Currency</span>
-            <select
-              className="field w-[92px]"
+            <CurrencyPicker
+              compact
               value={state.business.currency}
-              aria-label="Currency selector"
+              onChange={(c) => void requestCurrencyChange(c)}
               disabled={currencyMut.isPending}
-              onChange={(e) => void requestCurrencyChange(e.target.value)}
-            >
-              {["INR", "USD", "EUR", "GBP", "AED"].map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
+            />
             {currencyMut.isPending ? (
               <span className="whitespace-nowrap text-xs font-bold text-[var(--accent)]" role="status">
                 Converting…
@@ -1986,32 +1987,24 @@ export function App() {
                 />
               </div>
               <div className="rounded-2xl bg-[var(--surface-soft)] px-3 py-3 text-left">
-                <label className="block text-sm font-bold">
-                  <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">Currency</span>
-                  <select
-                    className="field w-full"
-                    value={state.business.currency}
-                    aria-label="Currency selector"
-                    disabled={currencyMut.isPending}
-                    onChange={(e) => {
-                      setMoreOpen(false);
-                      void requestCurrencyChange(e.target.value);
-                    }}
-                  >
-                    {["INR", "USD", "EUR", "GBP", "AED"].map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                  {currencyMut.isPending ? (
-                    <span className="mt-1 block text-xs font-bold text-[var(--accent)]" role="status">
-                      Converting…
-                    </span>
-                  ) : (
-                    <span className="mt-1 block text-[11px] font-semibold text-[var(--dim)]">
-                      Changes all amounts in {MODE_LABELS[appMode]}
-                    </span>
-                  )}
-                </label>
+                <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-[var(--dim)]">Currency</span>
+                <CurrencyPicker
+                  value={state.business.currency}
+                  onChange={(c) => {
+                    setMoreOpen(false);
+                    void requestCurrencyChange(c);
+                  }}
+                  disabled={currencyMut.isPending}
+                />
+                {currencyMut.isPending ? (
+                  <span className="mt-1 block text-xs font-bold text-[var(--accent)]" role="status">
+                    Converting…
+                  </span>
+                ) : (
+                  <span className="mt-1 block text-[11px] font-semibold text-[var(--dim)]">
+                    Changes all amounts in {MODE_LABELS[appMode]}
+                  </span>
+                )}
               </div>
             </div>
             {personal ? (
