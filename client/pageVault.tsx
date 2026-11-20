@@ -12,8 +12,6 @@ DEFAULT_CURSOR_STYLE,
 getStoredCursorStyle,
 type CursorStyle,
 } from "./cursor";
-import { WhyCashflowGenius } from "./pitch";
-import { InstallButton } from "./pwa";
 
 type SaveStatus = "idle" | "saving" | "saved" | "failed";
 
@@ -765,27 +763,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         <p className="mt-3 text-sm leading-relaxed text-[var(--dim)]" role="status">
           {switchMode.isPending
             ? "Switching workspace…"
-            : appMode === "personal"
-              ? "Personal Money is on: daily expenses, income, budgets and everyday categories lead the app. Business tools — invoices, GST & Tax, the Profit Leak Scanner and Business Reports — stay in the menu under “Business tools”, quieter but fully working."
-              : appMode === "student"
-                ? "Student / First Salary is on: pocket money, part-time or first-salary income, fees and everyday student spending lead the app. Business tools stay in the menu under “Business tools”, quieter but fully working."
-                : appMode === "creator"
-                  ? "Creator & Freelancer is on: client payments, brand deals and platform payouts lead the app, with invoices and tax estimates built for creator and freelance work."
-                  : "Business Money is on: invoices, GST & Tax, the Profit Leak Scanner, Business Reports, Future Lens and the What-if Lab lead the app, focused on your business."}
-        </p>
-        <p className="mt-2 rounded-xl bg-[var(--surface-soft)] px-3 py-2 text-xs leading-relaxed text-[var(--dim)]">
-          Each mode is a completely separate workspace with its own transactions,
-          invoices, budgets, notes and settings. Switching never moves, merges or
-          deletes anything — you simply open a different workspace, and each one
-          keeps exactly the records you made in it. You can use Personal Money and
-          Business Money together: both stay saved at the same time, the switcher
-          under the top bar (and on the Command Center) moves between them in one
-          tap, and the Command Center's “Personal + Business — together” panel
-          shows both totals side by side plus a combined cashflow overview —
-          combined only for viewing, records always separate. In Personal Money,
-          Rent, Bills, EMI, Loans, Extra expenses and Shopping are ready-made
-          expense categories, and “✎ Custom — type your own” in any category
-          dropdown lets you add your own, remembered in that workspace only.
+            : "Each mode is a separate workspace — switching never moves, merges or deletes anything."}
         </p>
         {state.workspaces.length > 1 ? (
           <ul className="mt-3 space-y-1.5" aria-label="Your workspaces">
@@ -815,9 +793,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         {finePointer ? (
           <>
             <p className="text-sm leading-relaxed text-[var(--dim)]">
-              Pick the mouse cursor you like. It changes <strong className="text-[var(--text)]">immediately, everywhere in the app</strong> —
-              no reload — and your choice is remembered for your account, so it is still
-              yours after logging out, logging back in, or switching workspaces.
+              Pick a cursor — it changes immediately, and your choice is saved to your account.
             </p>
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Choose your cursor style">
               {CURSOR_OPTIONS.map((opt) => {
@@ -867,21 +843,14 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]" role="status">
               {saveCursor.isPending
                 ? "Saving your choice to your account…"
-                : "Custom cursors show on desktop with a mouse or trackpad. On phones and touch devices, touch works exactly as before."}
+                : "Cursors show on desktop with a mouse or trackpad."}
             </p>
           </>
         ) : (
           <div className="rounded-2xl bg-[var(--surface-soft)] px-4 py-3">
             <p className="text-sm leading-relaxed text-[var(--dim)]">
-              <strong className="text-[var(--text)]">Custom cursors only work on desktop</strong> — with a
-              mouse or trackpad. This device uses touch, so there is no cursor to change
-              here and your touch interaction stays exactly as it is.
-            </p>
-            <p className="mt-1.5 text-sm leading-relaxed text-[var(--dim)]">
-              Your saved choice on this account is{" "}
-              <strong className="text-[var(--text)]">{cursorLabel(cursorChoice)}</strong> — open
-              Cashflow Genius on a desktop to preview or change it, and it will be waiting
-              for you there.
+              Custom cursors need a mouse or trackpad, so there is nothing to change on this touch device. Your saved choice is{" "}
+              <strong className="text-[var(--text)]">{cursorLabel(cursorChoice)}</strong>.
             </p>
           </div>
         )}
@@ -899,11 +868,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           ) : (
             <span className="font-bold text-[var(--warn-text)]">Not verified</span>
           )}
-        </p>
-        <p className="mt-1 text-sm text-[var(--dim)]">
-          Every record in this workspace belongs to this account only. Any other
-          account gets its own separate workspace that starts empty — your
-          transactions, invoices, notes and reports are never visible to them.
         </p>
         <button type="button" className="btn-ghost mt-3 px-5 py-2.5 text-sm" onClick={() => void doLogout()}>
           ⎋ Log out
@@ -941,13 +905,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           hint="Your data is yours — full structure, not CSV-only, and bulk edits can be undone"
         />
         <p className="text-sm leading-relaxed text-[var(--dim)]">
-          A full backup is one JSON file covering <strong className="text-[var(--text)]">every workspace</strong> (Personal,
-          Business, Creator, Student): transactions with their categories, payees and payment
-          methods, invoices with items, notes, recurring schedules, budgets, your custom
-          categories, scenarios and EMI plans. Changed phones? Sign in with the same account
-          on the new phone and restore the file — it merges carefully: records already
-          present are skipped, nothing is overwritten or deleted, and each record returns
-          to its own workspace.
+          One JSON file with every workspace. Restoring merges it in — nothing is overwritten or deleted.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" className="btn-primary px-5 py-2.5 text-sm" disabled={exportBackup.isPending} onClick={() => exportBackup.mutate()}>
@@ -997,8 +955,8 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         ) : null}
         <p className="mt-3 text-xs leading-relaxed text-[var(--dim)]">
           {lastImport
-            ? `Last CSV import in this workspace: ${lastImport.detail} — ${new Date(lastImport.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}. Imports always report imported / duplicate / invalid counts and skip exact duplicates, so re-importing a statement — refunds included — never double-counts.`
-            : "No CSV import has been recorded in this workspace yet. Imports always report imported / duplicate / invalid counts and skip exact duplicates, so re-importing a statement — refunds included — never double-counts."}
+            ? `Last CSV import in this workspace: ${lastImport.detail} — ${new Date(lastImport.createdAt).toLocaleString("en-IN", { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.`
+            : "No CSV import has been recorded in this workspace yet."}
         </p>
       </section>
 
@@ -1009,9 +967,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
         />
         {(state.customCategories ?? []).length === 0 ? (
           <p className="text-sm text-[var(--dim)]">
-            None yet in this workspace. Pick “✎ Custom — type your own” in any category
-            dropdown (Quick Add, Money Flow, recurring schedules, budgets) and the name you
-            type will be remembered here, in this workspace only.
+            None yet. Pick “✎ Custom — type your own” in any category dropdown and the name will be remembered here.
           </p>
         ) : (
           <ul className="space-y-2">
@@ -1056,20 +1012,8 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           </ul>
         )}
         <p className="mt-2 text-xs text-[var(--dim)]">
-          Renaming updates every transaction, recurring schedule and budget using the name
-          in this workspace. Removing only takes it off the remembered list — records
-          already using it keep it.
+          Renaming updates every record using the name. Removing only takes it off this list.
         </p>
-      </section>
-
-      <section className="card p-5" aria-label="Pricing, ads and offers — the plain facts">
-        <SectionTitle title="Pricing, ads & offers — the plain facts" />
-        <ul className="list-disc space-y-1.5 pl-5 text-sm text-[var(--dim)]">
-          <li><strong className="text-[var(--text)]">No subscription, no paywall — in this build:</strong> every module — reports, forecasts, the scanner, all of it — is included and open. Nothing is gated behind a higher tier today, and there is no auto-renewal, so there is no surprise charge to remind you about. The planned business model (see “Why Cashflow Genius?” below) is free basic + a future Pro for the AI CFO and advanced reports — planned, not active, and never switched on silently.</li>
-          <li><strong className="text-[var(--text)]">No ads:</strong> not in the free flow, not anywhere. Nothing you record is sold or used for marketing.</li>
-          <li><strong className="text-[var(--text)]">No loan or BNPL offers:</strong> you will never see a loan popup inside your expense flow, and this app never reads your SMS — for credit scoring or anything else.</li>
-          <li><strong className="text-[var(--text)]">Support:</strong> if something looks wrong with your money records, first check Settings → Live connections (it shows what is actually connected) and Recent activity below (what actually happened). For anything else, ask Muse in chat — that's the support channel for this workspace, and it can inspect and fix the app itself.</li>
-        </ul>
       </section>
 
       <section className="card border-[#e3b3ae] p-5" aria-label="Delete account permanently">
@@ -1177,32 +1121,10 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
                 minute: "2-digit",
                 second: "2-digit",
               })}
-              . Every status above is checked live on the server — a service is only
-              marked “Live” after a real check succeeds (for Google sign-in, only when
-              Supabase itself reports the Google provider enabled), and this app never
-              displays a connection it has not verified.
+              . A service is marked “Live” only after a real check succeeds.
             </p>
           </>
         )}
-      </section>
-
-      <section className="card p-5" aria-label="Why Cashflow Genius — the pitch">
-        <SectionTitle
-          title="Why Cashflow Genius?"
-          hint="The short pitch — problem, India-first design, differences, honest limits, privacy and the business model"
-        />
-        <WhyCashflowGenius />
-      </section>
-
-      <section className="card p-5" aria-label="AI engine">
-        <SectionTitle title="AI engine" />
-        <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
-          The AI CFO runs on <strong className="text-[var(--text)]">ChatGPT (gpt-4o-mini)</strong> for
-          everyone — one shared key on the server, so no key is needed from you and there is
-          nothing to enter here. Answers are generated from your own figures only. The Live
-          connections panel above shows whether a real ChatGPT call has succeeded for this
-          account yet.
-        </p>
       </section>
 
       <section className="card p-5" aria-label="Business profile">
@@ -1287,16 +1209,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
           hint="The guided walkthrough of everything Cashflow Genius can do"
         />
         <p className="text-sm leading-relaxed text-[var(--dim)]">
-          The app tour walks through every main thing, one step at a time — Home,
-          Money in &amp; out, Quick Add with voice and SMS import, What&rsquo;s due,
-          Savings goals, Find leaks &amp; budgets, the AI CFO, Invoices, Scam Shield
-          and Reports. It only navigates and explains; it never touches your data,
-          and you can close it on any step.
-        </p>
-        <p className="mt-2 text-sm text-[var(--dim)]" role="status">
-          {state.tourDismissed
-            ? "You've finished the tour (or asked not to see it again) — it won't open on its own any more, but you can replay it here any time."
-            : "New accounts see the tour once, right after setup. You can open it here any time."}
+          A guided walkthrough of the app — it only explains, never touches your data.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -1309,77 +1222,6 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
             🧭 Start the app tour
           </button>
         </div>
-      </section>
-
-      <section className="card p-5" aria-label="Install app">
-        <SectionTitle
-          title="Install app"
-          hint="Put Cashflow Genius on your phone's home screen"
-        />
-        <p className="text-sm leading-relaxed text-[var(--dim)]">
-          Cashflow Genius is an installable app: add it to your home screen and it
-          opens full-screen like a real app — no browser bar — with the same
-          account and the same records.
-        </p>
-        <div className="mt-3">
-          <InstallButton onNotify={notify} />
-        </div>
-      </section>
-
-      <section className="card p-5" aria-label="How this workspace works">
-        <SectionTitle title="Architecture & integrations — the honest version" />
-        <ul className="list-disc space-y-2 pl-5 text-sm text-[var(--dim)]">
-          <li>
-            <strong className="text-[var(--text)]">Persistence:</strong> all records live
-            in this artifact's own database with server-side actions — the Muse runtime
-            equivalent of the brief's Supabase/Postgres design (same ownership-checked,
-            validate-on-the-server model; amounts are stored as exact integer minor
-            units, never floats). The connected Supabase project is used for
-            identity only — Google sign-in and email verification — no
-            records are stored in Supabase.
-          </li>
-          <li>
-            <strong className="text-[var(--text)]">AI CFO:</strong> the brief asks for
-            Gemini through a Supabase Edge Function with GEMINI_API_KEY in server
-            secrets. You can pick the engine in Settings — Gemini (Google AI Studio
-            key) or OpenRouter (free :free models, or a paid model when the account
-            has credits). Without a working key for the selected provider, answers
-            come from the honest rule-based fallback, fed only with figures calculated
-            from your records. The app never claims an AI connection it does not
-            have, and no key is ever exposed to the browser.
-          </li>
-          <li>
-            <strong className="text-[var(--text)]">Accounts & sign-in:</strong> this
-            workspace has real accounts, two ways in. “Continue with Google” runs
-            the real Google OAuth flow through the connected Supabase project
-            (Supabase Auth, Google provider enabled — see Live connections above):
-            the server verifies your Supabase token with Supabase before opening
-            anything, and your Google email maps to your own account here, with
-            its own empty workspace if you are new. Or sign up with an email
-            address and a password, and verify by tapping the confirmation link
-            Supabase emails to your own inbox (its free built-in sender,
-            checked by Supabase itself — never generated or shown by this
-            app); every record is stored against your account only
-            (passwords are kept as salted hashes, never in plain text).
-            Mobile-number sign-in is not offered: SMS OTP is never free,
-            so a phone number exists only as an optional profile detail.
-            Password reset for email accounts is not wired in-app yet and
-            stays honestly unavailable — a reset code is never handed to
-            an unauthenticated requester. Records from before accounts existed are preserved in
-            the database but quarantined: no account can see them, since their
-            ownership can't be verified, and every account starts with an
-            empty workspace.
-          </li>
-          <li>
-            <strong className="text-[var(--text)]">Calculations:</strong> revenue =
-            posted income; expenses = posted expenses; profit = revenue − expenses;
-            cash = opening balance + income − expenses. Forecasts and simulations are
-            deterministic and list their assumptions.
-          </li>
-        </ul>
-        <button type="button" className="btn-ghost mt-4 px-4 py-2 text-sm" onClick={() => go("dashboard")}>
-          Back to Command Center
-        </button>
       </section>
 
       <section className="card p-5" aria-label="Recent activity">
