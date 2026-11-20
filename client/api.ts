@@ -140,6 +140,11 @@ const READ_ONLY_ACTIONS = new Set([
   // the whole ledger for nothing). Saving happens later, one
   // saveTransaction per confirmed item, and those do dispatch.
   "analyseReceipt",
+  // getSavingsSchedules is a pure read (the Savings page lists the
+  // workspace's schedules) — it must not dispatch cg:mutated either.
+  // applyDueSavingsSchedules is NOT here: it writes deposit transfers,
+  // so its success must refetch the ledger like any other mutation.
+  "getSavingsSchedules",
   // generateInsights only upserts insight rows — it never touches the
   // ledger getState reads, so it must not dispatch cg:mutated (which
   // would refetch the whole ledger for nothing). The App listener
