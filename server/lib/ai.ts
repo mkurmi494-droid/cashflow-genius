@@ -289,6 +289,18 @@ function ruleBasedFallback(
         "The screenshot could not be read — no AI vision model is connected. Verify the payment directly in your bank/UPI app.",
     };
   }
+  if (keys.includes("reply")) {
+    // Home AI chat: the fallback must be a VALID reply shape, not
+    // null. A null here used to make askHomeChat read .reply of null
+    // and throw a TypeError to the user (live, 2026-11-20) whenever
+    // the model call or its parse failed. "chat" with no plan means
+    // the chat answers honestly and writes nothing.
+    return {
+      kind: "chat",
+      reply:
+        `The AI could not be reached just now — ${engine} did not answer. Nothing was changed. Try again in a bit.`,
+    };
+  }
   return null;
 }
 
