@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 // Procedural particle field + glass sphere. Pure CSS/canvas-free DOM so it
 // stays light, works everywhere, and is the fallback "video" background the
@@ -217,6 +217,16 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  // Escape closes the sheet, and the header stays pinned while the
+  // content scrolls — on a phone the list can be taller than the
+  // screen, and the close button must never scroll out of reach.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-[rgba(30,51,41,0.38)] p-0 backdrop-blur-sm sm:items-center sm:p-6"
@@ -231,7 +241,7 @@ export function Modal({
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex items-center justify-between gap-3 rounded-t-3xl bg-[var(--surface)] px-5 pb-3 pt-5">
           <h3 className="text-lg font-extrabold">{title}</h3>
           <button
             type="button"
