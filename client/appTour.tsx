@@ -45,8 +45,8 @@ const STEPS: AppTourStep[] = [
   },
   {
     icon: "▤",
-    title: "Four money modes, fully separate",
-    body: "Personal Money, Business Money, Creator & Freelancer and Student / First Salary are four completely separate workspaces — own records, own budgets, own savings. Switch any time from the bar under the top bar or in Settings; switching never moves or mixes a single record.",
+    title: "Three money modes, fully separate",
+    body: "Personal Money, Business Money and Creator & Freelancer are three completely separate workspaces — own records, own budgets, own savings. Switch any time from the bar under the top bar or in Settings; switching never moves or mixes a single record.",
     route: "settings",
   },
   {
