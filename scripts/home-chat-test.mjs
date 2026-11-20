@@ -198,6 +198,61 @@ check(
 );
 check("unknown kind rejected", mod.normalizeHomeChatPlan({ kind: "teleport_money" }, TODAY).ok, false);
 check("non-object plan rejected", mod.normalizeHomeChatPlan("hello", TODAY).ok, false);
+// (17) nested plan: the model sometimes wraps the plan in a key named
+// after its kind — plan: {"add_transaction": {...}} (live, 2026-11-20).
+// The unwrap must recover the inner plan, including for confirm kinds.
+const nestedTxn = mod.normalizeHomeChatPlan(
+  {
+    add_transaction: {
+      kind: "add_transaction",
+      type: "expense",
+      amountCents: 50000,
+      category: "Food",
+      description: "Food expense",
+      counterparty: "N/A",
+      date: "2026-11-20",
+    },
+  },
+  TODAY,
+);
+check("nested add_transaction unwraps", nestedTxn, {
+  ok: true,
+  plan: {
+    kind: "add_transaction",
+    type: "expense",
+    amountCents: 50000,
+    category: "Food",
+    description: "Food expense",
+    counterparty: "N/A",
+    date: "2026-11-20",
+  },
+});
+check(
+  "nested delete_transaction unwraps and needs confirm",
+  mod.planNeedsConfirm(
+    mod.normalizeHomeChatPlan(
+      {
+        delete_transaction: {
+          kind: "delete_transaction",
+          type: "expense",
+          amountCents: 50000,
+          date: "2026-11-20",
+          description: "food",
+        },
+      },
+      TODAY,
+    ).plan,
+  ),
+  true,
+);
+check(
+  "two-key wrapper rejected (not a single-kind nest)",
+  mod.normalizeHomeChatPlan(
+    { add_transaction: { kind: "add_transaction" }, add_budget: { kind: "add_budget" } },
+    TODAY,
+  ).ok,
+  false,
+);
 check(
   "describePlan add_transaction",
   mod.describePlan(txn.plan, fmt),
