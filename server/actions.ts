@@ -54,6 +54,12 @@ import {
   type LendBorrowDirection,
   type LendBorrowRecord,
 } from "./lib/lendBorrow";
+import {
+  describePlan,
+  normalizeHomeChatPlan,
+  planNeedsConfirm,
+  type HomeChatPlan,
+} from "./lib/homeChat";
 
 type Db = typeof db;
 
@@ -62,6 +68,11 @@ const uid = () =>
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(iso: string, delta: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
 }
 
 // ---------- money modes = separate workspaces ----------
@@ -1948,6 +1959,260 @@ async function listActiveInsights(db: Db, ownerId: string, mode: AppModeT) {
     insights: rows.map(insightOut),
     generatedAt: runRow?.generatedAt.toISOString() ?? null,
   };
+}
+
+// ---------- Home AI chat: plan schema + execution ----------
+// The plan shape the model returns (mirrors server/lib/homeChat.ts,
+// which strictly re-validates it). Amounts are integer paise/cents
+// in the workspace currency.
+const homeChatPlanZod = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("add_transaction"),
+    type: z.enum(["income", "expense"]),
+    amountCents: z.number().int().positive().max(100_000_000_00),
+    category: z.string().min(1).max(60),
+    description: z.string().max(200),
+    counterparty: z.string().max(120),
+    date: z.string(),
+  }),
+  z.object({
+    kind: z.literal("add_budget"),
+    category: z.string().min(1).max(60),
+    monthlyLimitCents: z.number().int().positive().max(100_000_000_00),
+  }),
+  z.object({
+    kind: z.literal("add_savings_goal"),
+    name: z.string().min(1).max(120),
+    targetCents: z.number().int().positive().max(100_000_000_00),
+    targetDate: z.string(),
+  }),
+  z.object({
+    kind: z.literal("deposit_savings"),
+    goalName: z.string().min(1).max(120),
+    amountCents: z.number().int().positive().max(100_000_000_00),
+    date: z.string(),
+  }),
+  z.object({
+    kind: z.literal("add_lend_borrow"),
+    direction: z.enum(["lent", "borrowed"]),
+    person: z.string().min(1).max(120),
+    amountCents: z.number().int().positive().max(100_000_000_00),
+    date: z.string(),
+    dueDate: z.string().nullable(),
+    note: z.string().max(500),
+  }),
+  z.object({ kind: z.literal("add_note"), text: z.string().min(1).max(2000) }),
+  z.object({
+    kind: z.literal("add_recurring"),
+    type: z.enum(["income", "expense"]),
+    category: z.string().min(1).max(60),
+    description: z.string().max(200),
+    amountCents: z.number().int().positive().max(100_000_000_00),
+    frequency: z.enum(["weekly", "monthly"]),
+    nextDate: z.string(),
+  }),
+  z.object({
+    kind: z.literal("delete_transaction"),
+    amountCents: z.number().int().positive().max(100_000_000_00),
+    date: z.string(),
+    type: z.enum(["income", "expense"]),
+    description: z.string().max(200),
+  }),
+  z.object({ kind: z.literal("change_currency"), currency: z.string().min(3).max(3) }),
+]);
+
+type HomeChatExec =
+  | { ok: true; reply: string; summary: string; undoId: string | null; undoKind: "transaction" | null }
+  | { ok: false; error: string };
+
+/** Finds the one transaction a delete plan means, by amount + date + type (+ description hint). */
+async function resolveDeleteMatch(
+  ownerId: string,
+  wsMode: string,
+  plan: Extract<HomeChatPlan, { kind: "delete_transaction" }>,
+): Promise<{ ok: true; row: typeof schema.transactions.$inferSelect } | { ok: false; error: string }> {
+  const rows = await db
+    .select()
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.ownerId, ownerId),
+        eq(schema.transactions.mode, wsMode),
+        eq(schema.transactions.type, plan.type),
+        eq(schema.transactions.amountCents, plan.amountCents),
+        eq(schema.transactions.date, plan.date),
+      ),
+    );
+  const hint = plan.description.trim().toLowerCase();
+  const matches = hint
+    ? rows.filter(
+        (t) =>
+          (t.description || "").toLowerCase().includes(hint) ||
+          (t.category || "").toLowerCase().includes(hint),
+      )
+    : rows;
+  if (matches.length === 0)
+    return { ok: false, error: "I couldn't find that transaction in this workspace — check the amount and date." };
+  if (matches.length > 1)
+    return {
+      ok: false,
+      error: `I found ${matches.length} transactions with that amount on that date — tell me which one (for example, its description or category).`,
+    };
+  return { ok: true, row: matches[0] };
+}
+
+/**
+ * Executes a validated home-chat plan by calling the existing action
+ * handlers, so every write goes through the same validation, logging
+ * and category memory as the app's own forms. Only called with a plan
+ * that normalizeHomeChatPlan already accepted. The caller decides
+ * whether the plan may run now (safe + complete) or needs the owner's
+ * confirm tap first — delete and currency change always need it.
+ */
+async function executeHomeChatPlan(
+  ctx: { invalidateQueries(): void },
+  userId: string,
+  wsMode: string,
+  business: typeof schema.businesses.$inferSelect,
+  plan: HomeChatPlan,
+  token: string | undefined,
+  today: string,
+): Promise<HomeChatExec> {
+  const fmt = (c: number) =>
+    `${business.currency} ${(c / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  const summary = describePlan(plan, fmt);
+  try {
+    switch (plan.kind) {
+      case "add_transaction": {
+        const res = await Actions.saveTransaction.handler(ctx, {
+          token,
+          type: plan.type,
+          status: "posted",
+          category: plan.category,
+          description: plan.description,
+          counterparty: plan.counterparty,
+          amountCents: plan.amountCents,
+          date: plan.date,
+          paymentMethod: "",
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: res.id, undoKind: "transaction" };
+      }
+      case "add_budget": {
+        await Actions.saveBudget.handler(ctx, {
+          token,
+          category: plan.category,
+          monthlyLimitCents: plan.monthlyLimitCents,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "add_savings_goal": {
+        await Actions.saveSavingsGoal.handler(ctx, {
+          token,
+          name: plan.name,
+          targetCents: plan.targetCents,
+          targetDate: plan.targetDate,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "deposit_savings": {
+        const goals = await db
+          .select()
+          .from(schema.savingsGoals)
+          .where(and(eq(schema.savingsGoals.ownerId, userId), eq(schema.savingsGoals.mode, wsMode)));
+        const matches = goals.filter(
+          (g) => g.name.trim().toLowerCase() === plan.goalName.trim().toLowerCase(),
+        );
+        if (matches.length === 0)
+          return { ok: false, error: `I couldn't find a savings goal called "${plan.goalName}" in this workspace.` };
+        if (matches.length > 1)
+          return { ok: false, error: `There is more than one goal called "${plan.goalName}" — tell me which one.` };
+        const res = await Actions.addToSavingsGoal.handler(ctx, {
+          token,
+          goalId: matches[0].id,
+          amountCents: plan.amountCents,
+          date: plan.date,
+        });
+        if (!res.ok || !res.transferId)
+          return { ok: false, error: res.error ?? "The deposit didn't go through — the available cash may not cover it." };
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "add_lend_borrow": {
+        await Actions.saveLendBorrow.handler(ctx, {
+          token,
+          person: plan.person,
+          direction: plan.direction,
+          amountCents: plan.amountCents,
+          date: plan.date,
+          dueDate: plan.dueDate ?? undefined,
+          note: plan.note,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "add_note": {
+        await Actions.saveNote.handler(ctx, {
+          token,
+          title: plan.text.slice(0, 60),
+          content: plan.text,
+          category: "General",
+          tags: "",
+          pinned: false,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "add_recurring": {
+        await Actions.saveRecurring.handler(ctx, {
+          token,
+          type: plan.type,
+          category: plan.category,
+          description: plan.description,
+          amountCents: plan.amountCents,
+          frequency: plan.frequency,
+          nextDate: plan.nextDate,
+          active: true,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+      case "delete_transaction": {
+        const found = await resolveDeleteMatch(userId, wsMode, plan);
+        if (!found.ok) return { ok: false, error: found.error };
+        if (found.row.invoiceId)
+          return { ok: false, error: "That transaction is linked to an invoice payment and can't be deleted from here." };
+        await Actions.deleteTransaction.handler(ctx, { token, id: found.row.id });
+        return {
+          ok: true,
+          reply: `Deleted — ${summary}. You can undo it from the notification that just appeared.`,
+          summary,
+          undoId: null,
+          undoKind: null,
+        };
+      }
+      case "change_currency": {
+        await Actions.updateBusiness.handler(ctx, {
+          token,
+          mode: wsMode as "business" | "personal" | "creator",
+          name: business.name,
+          industry: business.industry,
+          country: business.country,
+          currency: plan.currency,
+          openingBalanceCents: business.openingBalanceCents,
+          timezone: business.timezone,
+          ownerName: business.ownerName,
+          ownerEmail: business.ownerEmail,
+          ownerPhone: business.ownerPhone || undefined,
+          gstRateBp: business.gstRateBp,
+          gstInclusive: business.gstInclusive === 1,
+          eligibleExpensePct: business.eligibleExpensePct,
+          onboarded: business.onboarded === 1,
+        });
+        return { ok: true, reply: `Done — ${summary}.`, summary, undoId: null, undoKind: null };
+      }
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      error: `That didn't go through — ${e instanceof Error ? e.message : "something went wrong"}. Nothing was changed.`,
+    };
+  }
 }
 
 export const Actions = {
@@ -5996,6 +6261,255 @@ Structure the reply as: a direct answer, the key numbers relied on (label + form
       await log(db, "AI CFO question", args.question.slice(0, 60), user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
       return { conversationId: convId, answer };
+    },
+  }),
+
+  // ---------- Home AI chat ----------
+  // The pinned assistant on the home screen: talks like an AI and can
+  // DO the work the owner asks for in words — add a transaction or a
+  // budget, start a savings goal, move money into a pot, record a
+  // lend/borrow, add a note or a recurring bill. The model returns a
+  // reply plus a plan; the plan is validated by
+  // server/lib/homeChat.ts before anything is written, and the write
+  // itself goes through the existing action handlers. Safe, complete
+  // plans execute at once and report what was done (with an Undo id
+  // for a new transaction). Anything destructive (delete, currency
+  // change) or anything the model is unsure about comes back as a
+  // confirm card instead — nothing in those paths executes until the
+  // owner taps "Yes, do it". The chat keeps no server history: the
+  // client holds the recent turns (per workspace) so no migration
+  // was needed.
+  askHomeChat: defineAction({
+    description:
+      "Home-screen AI chat: answers in the owner's language from the active workspace's real figures, and carries out spoken requests — add a transaction or budget, start a savings goal, deposit into a pot, record a lend/borrow, add a note or a recurring bill. Safe, complete requests execute at once; deletes, currency changes and anything doubtful return a confirm card instead and never execute until confirmed.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      message: z.string().min(1).max(1000),
+      history: z
+        .array(z.object({ role: z.enum(["user", "assistant"]), text: z.string().max(2000) }))
+        .max(12)
+        .optional(),
+      confirmedPlan: z.unknown().optional(),
+    }),
+    response: z.object({
+      reply: z.string(),
+      kind: z.enum(["chat", "action", "confirm", "clarify"]),
+      question: z.string().optional(),
+      confirm: z
+        .object({
+          plan: homeChatPlanZod,
+          summary: z.string(),
+          match: z.object({ id: z.string(), label: z.string() }).nullable(),
+        })
+        .optional(),
+      done: z
+        .object({
+          summary: z.string(),
+          undoId: z.string().nullable(),
+          undoKind: z.enum(["transaction"]).nullable(),
+        })
+        .optional(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      const wsMode = await activeMode(db, user.id);
+      const business = await ensureWorkspace(db, user.id, wsMode);
+      const today = todayStrIst();
+      const fmt = (c: number) =>
+        `${business.currency} ${(c / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+      // ---- Confirmed plan: the owner tapped "Yes, do it" on a confirm card.
+      if (args.confirmedPlan !== undefined) {
+        const norm = normalizeHomeChatPlan(args.confirmedPlan, today);
+        if (!norm.ok)
+          return { reply: `I couldn't run that — ${norm.error}`, kind: "clarify" as const };
+        const done = await executeHomeChatPlan(ctx, user.id, wsMode, business, norm.plan, args.token, today);
+        if (!done.ok) return { reply: done.error, kind: "clarify" as const };
+        return {
+          reply: done.reply,
+          kind: "action" as const,
+          done: { summary: done.summary, undoId: done.undoId, undoKind: done.undoKind },
+        };
+      }
+
+      // ---- New message: ground in the workspace's real figures, then ask the model.
+      const txns = await db
+        .select()
+        .from(schema.transactions)
+        .where(and(eq(schema.transactions.ownerId, user.id), eq(schema.transactions.mode, wsMode)));
+      const posted = txns.filter((t) => t.status === "posted");
+      const incomeCents = posted.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCents, 0);
+      const expenseCents = posted.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCents, 0);
+      const transfers = await db
+        .select()
+        .from(schema.savingsTransfers)
+        .where(and(eq(schema.savingsTransfers.ownerId, user.id), eq(schema.savingsTransfers.mode, wsMode)));
+      const savedCents = transfers.reduce(
+        (s, t) => s + (t.direction === "deposit" ? t.amountCents : -t.amountCents),
+        0,
+      );
+      const cashCents = business.openingBalanceCents + incomeCents - expenseCents - savedCents;
+      const curMonth = monthKey(today);
+      const monthIn = posted
+        .filter((t) => t.type === "income" && monthKey(t.date) === curMonth)
+        .reduce((s, t) => s + t.amountCents, 0);
+      const monthOut = posted
+        .filter((t) => t.type === "expense" && monthKey(t.date) === curMonth)
+        .reduce((s, t) => s + t.amountCents, 0);
+      const catTotals = new Map<string, number>();
+      for (const t of posted) {
+        if (t.type !== "expense") continue;
+        catTotals.set(t.category, (catTotals.get(t.category) ?? 0) + t.amountCents);
+      }
+      const catText = [...catTotals.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([c, v]) => `${c}: ${fmt(v)}`)
+        .join("; ");
+      const recent = [...posted]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 8)
+        .map(
+          (t) =>
+            `${t.date} · ${t.type} ${fmt(t.amountCents)} · ${t.category}${t.description ? ` · ${t.description}` : ""}`,
+        )
+        .join("; ");
+      const budgetRows = await db
+        .select()
+        .from(schema.budgets)
+        .where(and(eq(schema.budgets.ownerId, user.id), eq(schema.budgets.mode, wsMode)));
+      const budgetLines = budgetRows.map((b) => {
+        const spent = posted
+          .filter((t) => t.type === "expense" && t.category === b.category && monthKey(t.date) === curMonth)
+          .reduce((s, t) => s + t.amountCents, 0);
+        return `${b.category}: spent ${fmt(spent)} of ${fmt(b.monthlyLimitCents)} this month`;
+      });
+      const goalRows = await db
+        .select()
+        .from(schema.savingsGoals)
+        .where(and(eq(schema.savingsGoals.ownerId, user.id), eq(schema.savingsGoals.mode, wsMode)));
+      const goalLines = goalRows.map((g) => {
+        const saved = transfers
+          .filter((t) => t.goalId === g.id)
+          .reduce((s, t) => s + (t.direction === "deposit" ? t.amountCents : -t.amountCents), 0);
+        return `"${g.name}": saved ${fmt(saved)} of ${fmt(g.targetCents)} by ${g.targetDate}`;
+      });
+      const lendRows = await db
+        .select()
+        .from(schema.lendBorrow)
+        .where(and(eq(schema.lendBorrow.ownerId, user.id), eq(schema.lendBorrow.mode, wsMode)));
+      const lendOpen = lendRows.filter((r) => r.status === "open");
+      const owedToMe = lendOpen
+        .filter((r) => r.direction === "lent")
+        .reduce((s, r) => s + r.amountCents, 0);
+      const iOwe = lendOpen
+        .filter((r) => r.direction === "borrowed")
+        .reduce((s, r) => s + r.amountCents, 0);
+      const historyText = (args.history ?? [])
+        .slice(-8)
+        .map((h) => `${h.role === "user" ? "Owner" : "Assistant"}: ${h.text}`)
+        .join("\n");
+
+      const replySchema = z.object({
+        kind: z.enum(["chat", "action", "confirm", "clarify"]),
+        reply: z.string(),
+        question: z.string().optional(),
+        plan: homeChatPlanZod.optional(),
+      });
+      let raw: z.infer<typeof replySchema>;
+      try {
+        raw = await aiComplete(
+          `You are the home-screen AI assistant for "${business.name || "a money workspace"}" (${business.country}, currency ${business.currency}, workspace: ${business.mode}). The owner talks to you like a person and asks you to do things with their money — answer in the SAME language they write in (English, Hinglish in Roman script, or Hindi). Today is ${today} (IST). In dates, "aaj" means today, "kal" means yesterday and "parson" means tomorrow.
+
+Use ONLY the figures below. Never invent numbers, dates or records. If the figures cannot answer, say so plainly. Amounts inside a plan are integer paise/cents in ${business.currency}: ${business.currency} 500 = 50000, ${business.currency} 1,000 = 100000.
+
+FIGURES (active workspace only, as of ${today}):
+- Available cash: ${fmt(cashCents)} (opening ${fmt(business.openingBalanceCents)} + income ${fmt(incomeCents)} − expenses ${fmt(expenseCents)} − saved in pots ${fmt(savedCents)})
+- This month: in ${fmt(monthIn)}, out ${fmt(monthOut)}
+- Biggest expense categories: ${catText || "none recorded"}
+- Recent transactions: ${recent || "none"}
+- Budgets: ${budgetLines.length > 0 ? budgetLines.join("; ") : "none set"}
+- Savings goals: ${goalLines.length > 0 ? goalLines.join("; ") : "none"}
+- Lend & borrow (open): owed to me ${fmt(owedToMe)}, I owe ${fmt(iOwe)}
+
+RECENT CONVERSATION:
+${historyText || "(none)"}
+
+OWNER'S MESSAGE: ${args.message}
+
+Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action" | "confirm" | "clarify", "reply": "...", "question": "...", "plan": {...}} — omit "question" and "plan" when they do not apply.
+- "chat": just talking or answering — no work to do. "reply" is the answer.
+- "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
+- "confirm": the request is a delete or a currency change, OR you are unsure about an amount, a date, a category, a goal name or which record is meant. Put your best-guess plan in "plan" and what you are unsure about in "question".
+- "clarify": something essential is missing (no amount, no date, no name, no goal). Put the question in "question" and no plan.
+Plan shapes (exact keys, no others):
+- add_transaction: {"kind":"add_transaction","type":"income"|"expense","amountCents":number,"category":"...","description":"...","counterparty":"...","date":"yyyy-mm-dd"}
+- add_budget: {"kind":"add_budget","category":"...","monthlyLimitCents":number}
+- add_savings_goal: {"kind":"add_savings_goal","name":"...","targetCents":number,"targetDate":"yyyy-mm-dd"}
+- deposit_savings: {"kind":"deposit_savings","goalName":"...","amountCents":number,"date":"yyyy-mm-dd"}
+- add_lend_borrow: {"kind":"add_lend_borrow","direction":"lent"|"borrowed","person":"...","amountCents":number,"date":"yyyy-mm-dd","dueDate":"yyyy-mm-dd"|null,"note":"..."}
+- add_note: {"kind":"add_note","text":"..."}
+- add_recurring: {"kind":"add_recurring","type":"income"|"expense","category":"...","description":"...","amountCents":number,"frequency":"weekly"|"monthly","nextDate":"yyyy-mm-dd"}
+- delete_transaction: {"kind":"delete_transaction","type":"income"|"expense","amountCents":number,"date":"yyyy-mm-dd","description":"..."}
+- change_currency: {"kind":"change_currency","currency":"INR"|"USD"|"EUR"|"GBP"|"AED"|"JPY"|"AUD"|"CAD"|"CHF"|"SGD"}
+Rules: a budget needs a category and a monthly limit; a savings goal needs a name, a target amount and a target date — if any is missing, ask ("clarify") instead of guessing. A deposit needs the goal's exact name as listed above. "Yesterday" is ${addDays(today, -1)} and "tomorrow" is ${addDays(today, 1)} — use those dates, never the words, inside a plan.`,
+          { schema: replySchema },
+          await getAiSettings(user.id),
+        );
+      } catch {
+        return {
+          reply:
+            "I couldn't reach the AI just now, so I haven't done anything. Your money is unchanged — try again in a bit.",
+          kind: "chat" as const,
+        };
+      }
+
+      const replyText = typeof raw.reply === "string" && raw.reply.trim() ? raw.reply.trim() : "";
+      if (!replyText)
+        return { reply: "I didn't quite catch that — could you say it again?", kind: "clarify" as const };
+      if (!raw.plan) {
+        if (raw.kind === "clarify")
+          return { reply: replyText, kind: "clarify" as const, question: raw.question ?? replyText };
+        return { reply: replyText, kind: "chat" as const };
+      }
+      const norm = normalizeHomeChatPlan(raw.plan, today);
+      if (!norm.ok)
+        return {
+          reply: `${replyText} One thing I couldn't pin down: ${norm.error} Could you confirm it?`,
+          kind: "clarify" as const,
+          question: norm.error,
+        };
+      const plan = norm.plan;
+      // A delete or a currency change never executes on the model's word alone.
+      if (raw.kind === "confirm" || planNeedsConfirm(plan)) {
+        let match: { id: string; label: string } | null = null;
+        if (plan.kind === "delete_transaction") {
+          const found = await resolveDeleteMatch(user.id, wsMode, plan);
+          if (found.ok)
+            match = {
+              id: found.row.id,
+              label: `${found.row.type === "income" ? "Income" : "Expense"} ${fmt(found.row.amountCents)} · ${found.row.category}${found.row.description ? ` · ${found.row.description}` : ""} · ${found.row.date}`,
+            };
+          else
+            return { reply: `${replyText} ${found.error}`, kind: "clarify" as const, question: found.error };
+        }
+        return {
+          reply: replyText,
+          kind: "confirm" as const,
+          question: raw.question ?? "Shall I go ahead with this?",
+          confirm: { plan, summary: describePlan(plan, fmt), match },
+        };
+      }
+      if (raw.kind !== "action")
+        return { reply: replyText, kind: "chat" as const };
+      const done = await executeHomeChatPlan(ctx, user.id, wsMode, business, plan, args.token, today);
+      if (!done.ok) return { reply: done.error, kind: "clarify" as const };
+      return {
+        reply: done.reply,
+        kind: "action" as const,
+        done: { summary: done.summary, undoId: done.undoId, undoKind: done.undoKind },
+      };
     },
   }),
 
