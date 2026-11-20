@@ -80,34 +80,37 @@ export const EXPENSE_CATEGORIES = [
 // money mode. The server scopes every record to the active workspace
 // (state.activeMode); switching modes never mixes data. Business and
 // Creator are "business-like" (invoices, GST, scanner foregrounded);
-// Personal and Student are "everyday" modes (daily money wording,
-// business tools de-emphasised).
+// Personal is the "everyday" mode (daily money wording, business
+// tools de-emphasised). Student / First Salary was removed
+// 2026-11-20 — it folds into Personal.
 
-export type AppMode = "business" | "personal" | "creator" | "student";
+export type AppMode = "business" | "personal" | "creator";
 
-export const APP_MODES: AppMode[] = ["personal", "business", "creator", "student"];
+export const APP_MODES: AppMode[] = ["personal", "business", "creator"];
 
 export const MODE_LABELS: Record<AppMode, string> = {
   personal: "Personal Money",
   business: "Business Money",
   creator: "Creator & Freelancer",
-  student: "Student / First Salary",
 };
 
 export const MODE_ICONS: Record<AppMode, string> = {
   personal: "☰",
   business: "▤",
   creator: "✦",
-  student: "🎓",
 };
 
 export function modeOf(state: State): AppMode {
-  return state.activeMode ?? state.business.mode;
+  // Legacy Student workspaces fold into Personal (Student / First
+  // Salary was removed 2026-11-20): a stored "student" active mode
+  // from an older session lands on Personal instead of breaking.
+  const m = state.activeMode ?? state.business.mode;
+  return (m as string) === "student" ? "personal" : m;
 }
 
 /** Everyday-money modes: daily-spending wording, business tools quieter. */
 export function isPersonalLike(mode: AppMode): boolean {
-  return mode === "personal" || mode === "student";
+  return mode === "personal";
 }
 
 /** Business-like modes: invoices / GST / scanner presented at full weight. */
@@ -159,34 +162,12 @@ export const CREATOR_EXPENSE_CATEGORIES = [
   "General",
 ];
 
-export const STUDENT_INCOME_CATEGORIES = [
-  "Pocket money",
-  "Salary — first job",
-  "Part-time & internships",
-  "Scholarships",
-  "Family & friends",
-  "Other income",
-];
-
-export const STUDENT_EXPENSE_CATEGORIES = [
-  "Food & canteen",
-  "Fees & education",
-  "Transport",
-  "Books & courses",
-  "Shopping",
-  "Entertainment",
-  "Bills & recharge",
-  "General",
-];
-
 export function incomeCategoriesFor(mode: AppMode): string[] {
   switch (mode) {
     case "personal":
       return PERSONAL_INCOME_CATEGORIES;
     case "creator":
       return CREATOR_INCOME_CATEGORIES;
-    case "student":
-      return STUDENT_INCOME_CATEGORIES;
     default:
       return INCOME_CATEGORIES;
   }
@@ -198,8 +179,6 @@ export function expenseCategoriesFor(mode: AppMode): string[] {
       return PERSONAL_EXPENSE_CATEGORIES;
     case "creator":
       return CREATOR_EXPENSE_CATEGORIES;
-    case "student":
-      return STUDENT_EXPENSE_CATEGORIES;
     default:
       return EXPENSE_CATEGORIES;
   }
@@ -284,7 +263,7 @@ export function categoryOptionsFor(
 export function allKnownCategories(state: State): string[] {
   const used = state.transactions.map((t) => t.category);
   const remembered = (state.customCategories ?? []).map((c) => c.name);
-  return [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...PERSONAL_INCOME_CATEGORIES, ...PERSONAL_EXPENSE_CATEGORIES, ...CREATOR_INCOME_CATEGORIES, ...CREATOR_EXPENSE_CATEGORIES, ...STUDENT_INCOME_CATEGORIES, ...STUDENT_EXPENSE_CATEGORIES, ...used, ...remembered]
+  return [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...PERSONAL_INCOME_CATEGORIES, ...PERSONAL_EXPENSE_CATEGORIES, ...CREATOR_INCOME_CATEGORIES, ...CREATOR_EXPENSE_CATEGORIES, ...used, ...remembered]
     .filter((v, i, a) => a.indexOf(v) === i);
 }
 
