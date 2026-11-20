@@ -302,6 +302,18 @@ export const NOTE_CATEGORIES = [
   "General",
 ];
 
+/** Reads an uploaded image file as base64 (for AI vision calls). Shared by
+ *  Scam Shield and the receipt scanner so the same size/type rules apply. */
+export async function fileToBase64(file: File): Promise<{ dataBase64: string; mimeType: string }> {
+  const buf = await file.arrayBuffer();
+  let s = "";
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)) as unknown as number[]);
+  }
+  return { dataBase64: btoa(s), mimeType: file.type };
+}
+
 export function fmtMoney(cents: number, currency: string, digits = 0): string {
   const v = cents / 100;
   const sym =
