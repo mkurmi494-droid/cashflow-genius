@@ -16,6 +16,7 @@ import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, c
 import { CurrencyPicker, currencyMeta } from "./currencyPicker";
 import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { LoadingMark } from "./LoadingMark";
+import { AiAvatar } from "./AiAvatar";
 import { DashboardPage } from "./pageDashboard";
 import { AiCfoPage } from "./pageCfo";
 import { MoneyFlowPage } from "./pageMoney";
@@ -393,20 +394,37 @@ function QuickAdd({
   const [method, setMethod] = useState<string>("UPI");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Entry mode: type it, say it (voice), paste a bank/UPI message, or
-  // scan a bill photo.
-  const [entryTab, setEntryTab] = useState<"type" | "voice" | "sms" | "scan">("type");
-  // Bill scan: the photo, the AI draft (nothing saved until confirmed),
-  // and the editable items. Amounts are major-unit strings for editing.
-  type ScanDraftItem = { id: string; name: string; amount: string; category: string; customCategory: string };
-  const [scanImage, setScanImage] = useState<{ base64: string; mime: "image/jpeg" | "image/png"; name: string } | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [scanResult, setScanResult] = useState<Awaited<ReturnType<typeof api.analyseReceipt>> | null>(null);
-  const [scanItems, setScanItems] = useState<ScanDraftItem[]>([]);
-  const [scanDate, setScanDate] = useState(todayStr());
-  const [scanSaving, setScanSaving] = useState(false);
-  const scanFileRef = useRef<HTMLInputElement>(null);
-  const scanCategories = categoryOptionsFor(state, mode, "expense");
+  // Entry mode: type it, say it (voice), or paste a bank/UPI message.
+  // The bill scan lives in the Smart Add bar below the form now (see
+  // the Smart Add section), not as a fourth tab.
+  const [entryTab, setEntryTab] = useState<"type" | "voice" | "sms">("type");
+  // Smart Add: one chat-style bar (type / speak / snap a bill) whose
+  // AI draft is edited below and saved only on confirmation. Each
+  // draft row carries its own type, date and counterparty — a text
+  // line may mix income and expense on different dates, and a bill
+  // photo brings its own merchant and receipt date.
+  type SmartDraftItem = {
+    id: string;
+    name: string;
+    amount: string;
+    category: string;
+    customCategory: string;
+    type: "expense" | "income";
+    date: string;
+    counterparty: string;
+  };
+  const [smartText, setSmartText] = useState("");
+  const [smartError, setSmartError] = useState<string | null>(null);
+  const [smartItems, setSmartItems] = useState<SmartDraftItem[]>([]);
+  const [smartSource, setSmartSource] = useState<string>("");
+  const [smartSaving, setSmartSaving] = useState(false);
+  const [showCameraChoices, setShowCameraChoices] = useState(false);
+  const [billImage, setBillImage] = useState<{ base64: string; mime: "image/jpeg" | "image/png"; name: string } | null>(null);
+  const [receiptResult, setReceiptResult] = useState<Awaited<ReturnType<typeof api.analyseReceipt>> | null>(null);
+  const cameraFileRef = useRef<HTMLInputElement>(null);
+  const fileFileRef = useRef<HTMLInputElement>(null);
+  const smartExpenseCategories = categoryOptionsFor(state, mode, "expense");
+  const smartIncomeCategories = categoryOptionsFor(state, mode, "income");
   const [draftNotes, setDraftNotes] = useState<string[] | null>(null);
   const [draftSource, setDraftSource] = useState<string>("");
   const [voiceText, setVoiceText] = useState("");
@@ -511,83 +529,161 @@ function QuickAdd({
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
-  /** Bill scan: pick a photo, read it with the AI, edit the draft. */
-  const onPickScanImage = async (file: File | undefined) => {
-    setScanError(null);
-    setScanResult(null);
-    setScanItems([]);
+  /** Smart Add — text: "dinner 50, shopping 200 yesterday" becomes a
+   *  draft list. The AI parses it; the built-in parser answers when
+   *  the AI can't. Nothing is saved until the user checks the draft. */
+  const parseSmart = useMutation({
+    mutationFn: async (text: string) => await api.parseSmartEntry({ text }),
+    onSuccess: (res) => {
+      setSmartError(null);
+      setReceiptResult(null);
+      setBillImage(null);
+      setSmartSource(res.source === "ai" ? "✦ AI draft" : "Built-in parser draft");
+      setSmartItems(
+        res.entries.map((it, i) => {
+          const cats = it.type === "income" ? smartIncomeCategories : smartExpenseCategories;
+          const known = cats.includes(it.category);
+          return {
+            id: `${i}-${it.description.slice(0, 20)}`,
+            name: it.description,
+            amount: (it.amountCents / 100).toFixed(2),
+            category: known ? it.category : CUSTOM_CATEGORY,
+            customCategory: known ? "" : it.category,
+            type: it.type,
+            date: it.date,
+            counterparty: it.counterparty,
+          };
+        }),
+      );
+      if (res.entries.length === 0) {
+        setSmartError(res.note || "I could not find any amount in that — try 'dinner 50, shopping 200'.");
+      }
+    },
+    onError: (e) => setSmartError(e instanceof Error ? e.message : String(e)),
+  });
+
+  /** Smart Add — voice: the same speech recognition as the Voice
+   *  tab, but the transcript goes into the Smart bar and the AI
+   *  parses it into several entries at once. */
+  const startSmartListening = () => {
+    const Ctor = speechRecognitionCtor();
+    if (!Ctor) return;
+    setSmartError(null);
+    try {
+      const rec = new Ctor();
+      recognitionRef.current = rec;
+      rec.lang = "hi-IN";
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+      rec.onresult = (e) => {
+        const transcript = e.results[0]?.[0]?.transcript ?? "";
+        setListening(false);
+        if (transcript.trim()) {
+          setSmartText(transcript);
+          parseSmart.mutate(transcript);
+        }
+      };
+      rec.onend = () => setListening(false);
+      rec.onerror = () => {
+        setListening(false);
+        setSmartError("Couldn't hear the voice — please try again, or type the line below.");
+      };
+      rec.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+      setSmartError("Voice couldn't start in this browser — type the line below instead.");
+    }
+  };
+
+  /** Smart Add — bill photo: pick it (camera or files), the AI reads
+   *  it, and the items land in the same draft list. The photo is read
+   *  as soon as it is picked — no extra button. */
+  const onPickBillImage = async (file: File | undefined) => {
+    setSmartError(null);
+    setReceiptResult(null);
+    setSmartItems([]);
+    setShowCameraChoices(false);
     if (!file) return;
     if (file.type !== "image/jpeg" && file.type !== "image/png") {
-      setScanError("Please choose a JPG or PNG photo of the bill.");
+      setSmartError("Please choose a JPG or PNG photo of the bill.");
       return;
     }
     if (file.size > 6_000_000) {
-      setScanError("That photo is larger than 6 MB — please use a smaller one.");
+      setSmartError("That photo is larger than 6 MB — please use a smaller one.");
       return;
     }
     try {
       const data = await fileToBase64(file);
-      setScanImage({ base64: data.dataBase64, mime: data.mimeType as "image/jpeg" | "image/png", name: file.name });
+      const image = { base64: data.dataBase64, mime: data.mimeType as "image/jpeg" | "image/png", name: file.name };
+      setBillImage(image);
+      analyseReceipt.mutate(image);
     } catch {
-      setScanError("That photo could not be read. Try another one.");
+      setSmartError("That photo could not be read. Try another one.");
     }
   };
 
   const analyseReceipt = useMutation({
-    mutationFn: async () => {
-      if (!scanImage) throw new Error("Choose a bill photo first.");
-      return await api.analyseReceipt({ imageBase64: scanImage.base64, imageMimeType: scanImage.mime });
-    },
+    mutationFn: async (image: { base64: string; mime: "image/jpeg" | "image/png" }) =>
+      await api.analyseReceipt({ imageBase64: image.base64, imageMimeType: image.mime }),
     onSuccess: (res) => {
-      setScanResult(res);
-      setScanError(null);
-      setScanDate(res.receiptDate ?? todayStr());
-      setScanItems(
+      setReceiptResult(res);
+      setSmartError(null);
+      setSmartSource("✦ Bill draft");
+      setSmartItems(
         res.items.map((it, i) => {
-          const known = scanCategories.includes(it.category);
+          const known = smartExpenseCategories.includes(it.category);
           return {
             id: `${i}-${it.name.slice(0, 20)}`,
             name: it.name,
             amount: (it.amountCents / 100).toFixed(2),
             category: known ? it.category : CUSTOM_CATEGORY,
             customCategory: known ? "" : it.category,
+            type: "expense" as const,
+            date: res.receiptDate ?? todayStr(),
+            counterparty: res.merchantName ?? "",
           };
         }),
       );
+      if (res.items.length === 0) {
+        setSmartError(res.note || "This photo could not be read as a bill — try a clearer photo, straight on, with the items and total visible.");
+      }
     },
-    onError: (e) => setScanError(e instanceof Error ? e.message : String(e)),
+    onError: (e) => setSmartError(e instanceof Error ? e.message : String(e)),
   });
 
-  /** Saves every checked draft item as its own expense, one at a time,
-   *  and reports how many landed. A failed item stays in the draft so
-   *  it can be fixed and retried — nothing is silently dropped. */
-  const saveScan = async () => {
-    const valid = scanItems.filter((it) => it.name.trim() && (parseFloat(it.amount) || 0) > 0);
+  /** Saves every checked Smart draft row as its own transaction, one
+   *  at a time, and reports how many landed. A failed row stays in
+   *  the draft so it can be fixed and retried — nothing is silently
+   *  dropped. */
+  const saveSmart = async () => {
+    const valid = smartItems.filter((it) => it.name.trim() && (parseFloat(it.amount) || 0) > 0);
     if (valid.length === 0) {
-      setScanError("Nothing to save — check the items and amounts.");
+      setSmartError("Nothing to save — check the items and amounts.");
       return;
     }
-    setScanSaving(true);
-    setScanError(null);
+    setSmartSaving(true);
+    setSmartError(null);
     let saved = 0;
     let savedTotalCents = 0;
     const failed: string[] = [];
     for (const it of valid) {
       const amountCents = Math.round((parseFloat(it.amount) || 0) * 100);
+      const cats = it.type === "income" ? smartIncomeCategories : smartExpenseCategories;
       const cat = it.category === CUSTOM_CATEGORY ? it.customCategory.trim() : it.category;
-      if (!cat || amountCents <= 0) {
+      if (!cat || amountCents <= 0 || !cats.includes(cat) && it.category !== CUSTOM_CATEGORY) {
         failed.push(it.name.trim() || "Unnamed item");
         continue;
       }
       try {
         await api.saveTransaction({
-          type: "expense",
+          type: it.type,
           status: "posted",
           category: cat,
           description: it.name.trim().slice(0, 200),
-          counterparty: scanResult?.merchantName ?? "",
+          counterparty: it.counterparty.trim().slice(0, 120),
           amountCents,
-          date: scanDate,
+          date: it.date,
           paymentMethod: "",
         });
         saved++;
@@ -596,32 +692,29 @@ function QuickAdd({
         failed.push(it.name.trim() || "Unnamed item");
       }
     }
-    setScanSaving(false);
+    setSmartSaving(false);
     if (saved > 0) {
       notify(
-        `${saved} expense${saved > 1 ? "s" : ""} recorded from the bill (${fmtMoney(savedTotalCents, currency)})${failed.length ? ` — ${failed.length} could not be saved, fix and retry them` : ""}.`,
+        `${saved} transaction${saved > 1 ? "s" : ""} recorded (${fmtMoney(savedTotalCents, currency)})${failed.length ? ` — ${failed.length} could not be saved, fix and retry them` : ""}.`,
       );
       onSaved();
     }
     if (failed.length === 0) {
       onClose();
     } else {
-      setScanItems((items) =>
-        items.filter((it) => failed.includes(it.name.trim() || "Unnamed item")),
-      );
-      setScanError(`Could not save: ${failed.join(", ")}. The rest are saved — fix these and try again.`);
+      setSmartItems((items) => items.filter((it) => failed.includes(it.name.trim() || "Unnamed item")));
+      setSmartError(`Could not save: ${failed.join(", ")}. The rest are saved — fix these and try again.`);
     }
   };
 
   return (
     <Modal title="Quick add transaction" onClose={onClose}>
-      <div className="mb-4 grid grid-cols-4 gap-1 rounded-full border border-[var(--border)] bg-white p-1" role="group" aria-label="How do you want to add this transaction">
+      <div className="mb-4 grid grid-cols-3 gap-1 rounded-full border border-[var(--border)] bg-white p-1" role="group" aria-label="How do you want to add this transaction">
         {(
           [
             { key: "type", label: "⌨️ Type" },
             { key: "voice", label: "🎤 Voice" },
             { key: "sms", label: "📩 SMS import" },
-            { key: "scan", label: "📷 Scan bill" },
           ] as const
         ).map((t) => (
           <button
@@ -729,161 +822,6 @@ function QuickAdd({
         </div>
       ) : null}
 
-      {entryTab === "scan" ? (
-        <div className="mb-4 space-y-3 rounded-2xl bg-[var(--surface-soft)] p-4">
-          <p className="text-sm font-bold">Scan a bill — AI reads the items 📷</p>
-          <p className="text-xs leading-relaxed text-[var(--dim)]">
-            Take a photo of a bill or receipt. The AI reads every item and its category —
-            then you check the draft and save. <strong className="text-[var(--text)]">Nothing is auto-saved.</strong>
-          </p>
-          <input
-            ref={scanFileRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            className="hidden"
-            aria-label="Choose a bill photo"
-            onChange={(e) => void onPickScanImage(e.target.files?.[0])}
-          />
-          {scanImage ? (
-            <div className="flex items-center gap-3">
-              <img
-                src={`data:${scanImage.mime};base64,${scanImage.base64}`}
-                alt="Bill photo"
-                className="h-20 w-20 rounded-xl border border-[var(--border)] object-cover"
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-bold">{scanImage.name}</p>
-                <button type="button" className="text-xs font-bold text-[var(--accent)] underline" onClick={() => scanFileRef.current?.click()}>
-                  Choose a different photo
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button type="button" className="btn-primary w-full px-5 py-3 text-sm" onClick={() => scanFileRef.current?.click()}>
-              📷 Choose a bill photo
-            </button>
-          )}
-          {scanImage ? (
-            <button
-              type="button"
-              className="btn-primary w-full px-5 py-2.5 text-sm"
-              disabled={analyseReceipt.isPending}
-              onClick={() => analyseReceipt.mutate()}
-            >
-              {analyseReceipt.isPending ? "Reading your bill…" : "Read this bill →"}
-            </button>
-          ) : null}
-          {scanError ? (
-            <p className="rounded-xl bg-[var(--err)] px-3 py-2 text-xs font-semibold text-[var(--err-text)]" role="alert">{scanError}</p>
-          ) : null}
-          {scanResult && scanResult.items.length === 0 ? (
-            <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
-              This photo could not be read as a bill — {scanResult.note || "try a clearer photo, straight on, with the items and total visible."}
-            </p>
-          ) : null}
-          {scanResult && scanItems.length > 0 ? (
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-extrabold">{scanResult.merchantName ?? "Bill"}</span>
-                <label className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-[var(--dim)]">
-                  Date
-                  <input className="field w-[132px] px-2 py-1 text-xs" type="date" value={scanDate} onChange={(e) => setScanDate(e.target.value)} aria-label="Receipt date" />
-                </label>
-              </div>
-              {scanResult.currencyCode !== currency ? (
-                <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
-                  This bill is in {scanResult.currencyCode} — your workspace is {currency}. Amounts are saved as shown; edit any amount first.
-                </p>
-              ) : null}
-              {scanResult.totalMismatch ? (
-                <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
-                  The bill total ({fmtMoney(scanResult.receiptTotalCents ?? 0, scanResult.currencyCode)}) doesn&apos;t match the items ({fmtMoney(scanResult.itemsTotalCents, scanResult.currencyCode)}) — check the amounts before saving.
-                </p>
-              ) : null}
-              <ul className="space-y-2">
-                {scanItems.map((it) => (
-                  <li key={it.id} className="space-y-2 rounded-2xl border border-[var(--border)] bg-white p-3">
-                    <div className="flex items-center gap-2">
-                      <input
-                        className="field min-w-0 flex-1 px-2 py-1.5 text-sm font-bold"
-                        value={it.name}
-                        onChange={(e) => setScanItems((items) => items.map((x) => (x.id === it.id ? { ...x, name: e.target.value } : x)))}
-                        aria-label="Item name"
-                        maxLength={200}
-                      />
-                      <button
-                        type="button"
-                        className="shrink-0 rounded-full px-2 py-1 text-xs font-bold text-[var(--dim)]"
-                        aria-label={`Remove ${it.name}`}
-                        onClick={() => setScanItems((items) => items.filter((x) => x.id !== it.id))}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">Amount ({scanResult.currencyCode})</span>
-                        <input
-                          className="field tnum px-2 py-1.5 text-sm font-bold"
-                          type="number"
-                          inputMode="decimal"
-                          step="0.01"
-                          min="0"
-                          value={it.amount}
-                          onChange={(e) => setScanItems((items) => items.map((x) => (x.id === it.id ? { ...x, amount: e.target.value } : x)))}
-                          aria-label={`Amount for ${it.name}`}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">Category</span>
-                        <CategorySelect
-                          options={scanCategories}
-                          value={it.category}
-                          onChange={(v) => setScanItems((items) => items.map((x) => (x.id === it.id ? { ...x, category: v, customCategory: "" } : x)))}
-                          ariaLabel={`Category for ${it.name}`}
-                        />
-                      </label>
-                    </div>
-                    {it.category === CUSTOM_CATEGORY ? (
-                      <input
-                        className="field px-2 py-1.5 text-sm"
-                        value={it.customCategory}
-                        onChange={(e) => setScanItems((items) => items.map((x) => (x.id === it.id ? { ...x, customCategory: e.target.value } : x)))}
-                        aria-label={`Custom category for ${it.name}`}
-                        placeholder="Type your own category"
-                        maxLength={60}
-                      />
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-bold">Total to save</span>
-                <span className="tnum font-extrabold">
-                  {fmtMoney(
-                    scanItems.reduce((a, it) => a + Math.round((parseFloat(it.amount) || 0) * 100), 0),
-                    currency,
-                  )}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="btn-primary w-full px-5 py-3 text-sm"
-                disabled={scanSaving || scanItems.length === 0}
-                onClick={() => void saveScan()}
-              >
-                {scanSaving ? "Saving…" : `Save ${scanItems.length} expense${scanItems.length > 1 ? "s" : ""}`}
-              </button>
-              <p className="text-[11px] leading-relaxed text-[var(--dim)]">
-                Each item is saved as its own expense, with {scanResult.merchantName ?? "the shop"} as the counterparty. Check every amount first — the AI can misread a bill.
-              </p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {entryTab !== "scan" ? (
       <form
         className="space-y-4"
         onSubmit={(e) => {
@@ -1027,7 +965,278 @@ function QuickAdd({
           Need counterparty, recurring schedules or CSV import? Money Flow has the full form.
         </p>
       </form>
-      ) : null}
+
+      {/* Smart Add — one chat-style bar below the manual form: type it,
+       *  speak it, or snap a bill. The AI makes the entries, the user
+       *  checks them, and only then are they saved. */}
+      <section className="mt-5 border-t border-[var(--border)] pt-4" aria-label="Smart add">
+        <div className="mb-3 flex items-start gap-2.5">
+          <AiAvatar size={36} label="AI avatar" />
+          <div>
+            <p className="text-sm font-extrabold">✦ Smart add — write it all at once</p>
+            <p className="text-xs leading-relaxed text-[var(--dim)]">
+              Type, speak or snap a bill — the AI makes the entries, you check them. Nothing is auto-saved.
+            </p>
+          </div>
+        </div>
+        <input
+          ref={cameraFileRef}
+          type="file"
+          accept="image/jpeg,image/png"
+          capture="environment"
+          className="hidden"
+          aria-label="Take a bill photo with the camera"
+          onChange={(e) => void onPickBillImage(e.target.files?.[0])}
+        />
+        <input
+          ref={fileFileRef}
+          type="file"
+          accept="image/jpeg,image/png"
+          className="hidden"
+          aria-label="Choose a bill photo from files"
+          onChange={(e) => void onPickBillImage(e.target.files?.[0])}
+        />
+        <form
+          className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-white py-1.5 pr-1.5 pl-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (smartText.trim().length >= 3) parseSmart.mutate(smartText.trim());
+          }}
+        >
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Write everything at once</span>
+            <input
+              className="w-full bg-transparent text-sm outline-none placeholder:text-[var(--dim)]"
+              value={smartText}
+              onChange={(e) => setSmartText(e.target.value)}
+              aria-label="Write everything at once"
+              placeholder="dinner 50, shopping 200 — yesterday"
+              maxLength={1000}
+            />
+          </label>
+          {speechSupported ? (
+            <button
+              type="button"
+              onClick={startSmartListening}
+              disabled={listening || parseSmart.isPending}
+              aria-label={listening ? "Listening, speak now" : "Speak the line"}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg text-white transition ${
+                listening ? "animate-pulse bg-[#e11d63]" : "bg-[#111827]"
+              }`}
+            >
+              {listening ? "🔴" : "🎤"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setShowCameraChoices((v) => !v)}
+            aria-label="Snap a bill photo"
+            aria-expanded={showCameraChoices}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#111827] text-lg text-white"
+          >
+            📷
+          </button>
+        </form>
+        {showCameraChoices ? (
+          <div className="mt-2 flex gap-2">
+            <button type="button" className="btn-primary flex-1 px-4 py-2.5 text-sm" onClick={() => cameraFileRef.current?.click()}>
+              📷 Take photo
+            </button>
+            <button type="button" className="btn-ghost flex-1 px-4 py-2.5 text-sm" onClick={() => fileFileRef.current?.click()}>
+              🖼 Choose from files
+            </button>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          className="btn-primary mt-2 w-full px-5 py-2.5 text-sm"
+          disabled={smartText.trim().length < 3 || parseSmart.isPending}
+          onClick={() => parseSmart.mutate(smartText.trim())}
+        >
+          {parseSmart.isPending ? "Understanding…" : "✦ Understand it →"}
+        </button>
+        {parseSmart.isPending || analyseReceipt.isPending ? (
+          <div className="mt-3 flex items-center gap-2.5 rounded-2xl bg-[var(--surface-soft)] px-3.5 py-3" role="status">
+            <AiAvatar size={28} pulse label="AI is working" />
+            <p className="text-sm font-semibold">{analyseReceipt.isPending ? "Reading your bill…" : "Understanding your line…"}</p>
+          </div>
+        ) : null}
+        {billImage ? (
+          <div className="mt-3 flex items-center gap-3">
+            <img
+              src={`data:${billImage.mime};base64,${billImage.base64}`}
+              alt="Bill photo"
+              className="h-16 w-16 rounded-xl border border-[var(--border)] object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold">{billImage.name}</p>
+              <button type="button" className="text-xs font-bold text-[var(--accent)] underline" onClick={() => setShowCameraChoices(true)}>
+                Choose a different photo
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {smartError ? (
+          <p className="mt-3 rounded-xl bg-[var(--err)] px-3 py-2 text-xs font-semibold text-[var(--err-text)]" role="alert">
+            {smartError}
+          </p>
+        ) : null}
+        {receiptResult && smartItems.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-extrabold">{receiptResult.merchantName ?? "Bill"}</span>
+            </div>
+            {receiptResult.currencyCode !== currency ? (
+              <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
+                This bill is in {receiptResult.currencyCode} — your workspace is {currency}. Amounts are saved as shown; edit any amount first.
+              </p>
+            ) : null}
+            {receiptResult.totalMismatch ? (
+              <p className="rounded-xl bg-[var(--warn)] px-3 py-2 text-xs font-semibold leading-relaxed text-[var(--warn-text)]" role="status">
+                The bill total ({fmtMoney(receiptResult.receiptTotalCents ?? 0, receiptResult.currencyCode)}) doesn&apos;t match the items (
+                {fmtMoney(receiptResult.itemsTotalCents, receiptResult.currencyCode)}) — check the amounts before saving.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {smartItems.length > 0 ? (
+          <div className="mt-3 space-y-3">
+            <p className="text-sm font-extrabold text-[var(--ai-text)]">{smartSource} — check &amp; edit, then save</p>
+            <ul className="space-y-2">
+              {smartItems.map((it) => (
+                <li key={it.id} className="space-y-2 rounded-2xl border border-[var(--border)] bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="field min-w-0 flex-1 px-2 py-1.5 text-sm font-bold"
+                      value={it.name}
+                      onChange={(e) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, name: e.target.value } : x)))}
+                      aria-label="Item description"
+                      maxLength={200}
+                    />
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-full px-2 py-1 text-xs font-bold text-[var(--dim)]"
+                      aria-label={`Remove ${it.name}`}
+                      onClick={() => setSmartItems((items) => items.filter((x) => x.id !== it.id))}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">Amount ({currency})</span>
+                      <input
+                        className="field tnum px-2 py-1.5 text-sm font-bold"
+                        type="number"
+                        inputMode="decimal"
+                        step="0.01"
+                        min="0"
+                        value={it.amount}
+                        onChange={(e) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, amount: e.target.value } : x)))}
+                        aria-label={`Amount for ${it.name}`}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">Category</span>
+                      <CategorySelect
+                        options={it.type === "income" ? smartIncomeCategories : smartExpenseCategories}
+                        value={it.category}
+                        onChange={(v) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, category: v, customCategory: "" } : x)))}
+                        ariaLabel={`Category for ${it.name}`}
+                      />
+                    </label>
+                  </div>
+                  {it.category === CUSTOM_CATEGORY ? (
+                    <input
+                      className="field px-2 py-1.5 text-sm"
+                      value={it.customCategory}
+                      onChange={(e) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, customCategory: e.target.value } : x)))}
+                      aria-label={`Custom category for ${it.name}`}
+                      placeholder="Type your own category"
+                      maxLength={60}
+                    />
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex gap-1" role="group" aria-label={`Money direction for ${it.name}`}>
+                      {(["expense", "income"] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          aria-pressed={it.type === t}
+                          onClick={() =>
+                            setSmartItems((items) =>
+                              items.map((x) =>
+                                x.id === it.id
+                                  ? {
+                                      ...x,
+                                      type: t,
+                                      category: (t === "income" ? smartIncomeCategories : smartExpenseCategories)[0] ?? "General",
+                                      customCategory: "",
+                                    }
+                                  : x,
+                              ),
+                            )
+                          }
+                          className={`flex-1 rounded-full px-2 py-1.5 text-xs font-bold ${
+                            it.type === t
+                              ? t === "income"
+                                ? "bg-[var(--accent)] text-white"
+                                : "bg-[#e11d63] text-white"
+                              : "bg-[var(--surface-soft)] text-[var(--dim)]"
+                          }`}
+                        >
+                          {t === "income" ? "↓ In" : "↑ Out"}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="block">
+                      <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">Date</span>
+                      <input
+                        className="field w-full px-2 py-1 text-xs"
+                        type="date"
+                        value={it.date}
+                        onChange={(e) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, date: e.target.value } : x)))}
+                        aria-label={`Date for ${it.name}`}
+                      />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="mb-0.5 block text-[11px] font-bold uppercase tracking-wide text-[var(--dim)]">From / to (optional)</span>
+                    <input
+                      className="field px-2 py-1.5 text-sm"
+                      value={it.counterparty}
+                      onChange={(e) => setSmartItems((items) => items.map((x) => (x.id === it.id ? { ...x, counterparty: e.target.value } : x)))}
+                      aria-label={`Counterparty for ${it.name}`}
+                      placeholder="e.g. Swiggy, Client name"
+                      maxLength={120}
+                    />
+                  </label>
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-bold">Total to save</span>
+              <span className="tnum font-extrabold">
+                {fmtMoney(
+                  smartItems.reduce((a, it) => a + Math.round((parseFloat(it.amount) || 0) * 100), 0),
+                  currency,
+                )}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn-primary w-full px-5 py-3 text-sm"
+              disabled={smartSaving || smartItems.length === 0}
+              onClick={() => void saveSmart()}
+            >
+              {smartSaving ? "Saving…" : `Save ${smartItems.length} transaction${smartItems.length > 1 ? "s" : ""}`}
+            </button>
+            <p className="text-[11px] leading-relaxed text-[var(--dim)]">
+              Each row is saved as its own transaction, with its own date and counterparty. Check every amount first — the AI can misread a line or a bill.
+            </p>
+          </div>
+        ) : null}
+      </section>
     </Modal>
   );
 }
