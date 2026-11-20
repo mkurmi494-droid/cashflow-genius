@@ -135,6 +135,11 @@ const READ_ONLY_ACTIONS = new Set([
   // OR its error box — it sat on skeletons past 75s live.
   "getInsights",
   "getBriefing",
+  // analyseReceipt only reads a photo and returns a draft — it writes
+  // nothing, so it must not dispatch cg:mutated (which would refetch
+  // the whole ledger for nothing). Saving happens later, one
+  // saveTransaction per confirmed item, and those do dispatch.
+  "analyseReceipt",
   // generateInsights only upserts insight rows — it never touches the
   // ledger getState reads, so it must not dispatch cg:mutated (which
   // would refetch the whole ledger for nothing). The App listener
