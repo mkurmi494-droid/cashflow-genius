@@ -146,8 +146,39 @@ function fail(error: string): Norm {
  * Strictly validates a raw plan object (from the model or from the
  * client's confirm tap) and returns the cleaned plan, or the reason
  * it cannot be executed. Never throws.
+ *
+ * The model sometimes wraps the plan in a key named after its kind —
+ * plan: {"add_transaction": {...}} instead of plan: {...} (live,
+ * 2026-11-20: both failed calls did exactly this). unwrapNestedPlan
+ * unwraps that one-key nesting before validation, so a well-formed
+ * plan is never lost to a shape error.
  */
+const PLAN_KINDS = new Set([
+  "add_transaction",
+  "add_budget",
+  "add_savings_goal",
+  "deposit_savings",
+  "add_lend_borrow",
+  "add_note",
+  "add_recurring",
+  "delete_transaction",
+  "change_currency",
+]);
+
+function unwrapNestedPlan(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  if (typeof raw.kind === "string") return raw;
+  const keys = Object.keys(raw);
+  if (keys.length === 1 && PLAN_KINDS.has(keys[0] as string)) {
+    const inner = raw[keys[0] as string];
+    if (isRecord(inner)) return inner;
+  }
+  return raw;
+}
+
 export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
+  if (!isRecord(raw)) return fail("Plan is not an object.");
+  raw = unwrapNestedPlan(raw);
   if (!isRecord(raw)) return fail("Plan is not an object.");
   const kind = raw.kind;
   if (typeof kind !== "string") return fail("Plan has no kind.");
