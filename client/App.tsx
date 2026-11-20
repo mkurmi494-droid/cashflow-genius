@@ -15,6 +15,7 @@ import type { Route } from "./types";
 import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, currencyConfirmOptions, fileToBase64, fmtMoney, isPersonalLike, modeOf, todayStr, workspaceHasMoney, type AppMode, type State } from "./lib";
 import { CurrencyPicker, currencyMeta } from "./currencyPicker";
 import { CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
+import { LoadingMark } from "./LoadingMark";
 import { DashboardPage } from "./pageDashboard";
 import { AiCfoPage } from "./pageCfo";
 import { MoneyFlowPage } from "./pageMoney";
@@ -1575,7 +1576,7 @@ export function App() {
       <div className="min-h-dvh bg-[var(--bg)] px-4 py-8" aria-busy="true" aria-label="Completing your Google sign-in">
         <SafeAreaTopScrim backgroundColor="var(--bg)" />
         <div className="mx-auto max-w-lg space-y-4">
-          <div className="skeleton mx-auto h-32 w-32 !rounded-full" />
+          <LoadingMark className="h-24 w-24" />
           <div className="skeleton mx-auto h-6 w-56" />
           <div className="skeleton mx-auto h-4 w-72 max-w-full" />
           <div className="skeleton h-12 w-full !rounded-full" />
@@ -1601,7 +1602,7 @@ export function App() {
       <div className="min-h-dvh bg-[var(--bg)] px-4 py-8" aria-busy="true" aria-label="Checking your session">
         <SafeAreaTopScrim backgroundColor="var(--bg)" />
         <div className="mx-auto max-w-lg space-y-4">
-          <div className="skeleton mx-auto h-32 w-32 !rounded-full" />
+          <LoadingMark className="h-24 w-24" />
           <div className="skeleton mx-auto h-6 w-56" />
           <div className="skeleton mx-auto h-4 w-72 max-w-full" />
           <div className="skeleton h-12 w-full !rounded-full" />
@@ -1677,7 +1678,7 @@ export function App() {
             <div className="skeleton h-24 hidden xl:block" />
           </div>
           <div className="skeleton h-64 w-full !rounded-3xl" />
-          <p className="text-center text-sm font-semibold text-[var(--dim)]">Loading your ledger…</p>
+          <LoadingMark label="Loading your ledger…" />
         </div>
       </div>
     );
@@ -1707,7 +1708,7 @@ export function App() {
             <div className="skeleton h-24 hidden xl:block" />
           </div>
           <div className="skeleton h-64 w-full !rounded-3xl" />
-          <p className="text-center text-sm font-semibold text-[var(--dim)]">Loading {MODE_LABELS[switchingTo]}…</p>
+          <LoadingMark label={`Loading ${MODE_LABELS[switchingTo]}…`} />
         </div>
       </div>
     );
