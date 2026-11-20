@@ -27,6 +27,7 @@ import { SavingsPage } from "./pageSavings";
 import { LendBorrowPage } from "./pageLend";
 import { MoneyToolsPage } from "./pageTools";
 import { CalculatorPanel } from "./calculator";
+import { HomeChatFab } from "./homeChat";
 import { ConfirmDialog, UndoToast, useSafety } from "./safety";
 import { applyCursorStyle, DEFAULT_CURSOR_STYLE } from "./cursor";
 import { ScamShieldPage } from "./pageShield";
@@ -2529,6 +2530,10 @@ export function App() {
       ) : null}
 
       {quickOpen ? <QuickNote onClose={() => setQuickOpen(false)} notify={notify} /> : null}
+      {/* Home AI chat — pinned on the home screen (dashboard) only: a
+          floating button that opens the chat sheet. It sits above the
+          Quick Note button so the two never overlap. */}
+      {route === "dashboard" ? <HomeChatFab mode={appMode} /> : null}
       {quickAddOpen ? (
         <QuickAdd
           currency={state.business.currency}
