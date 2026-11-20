@@ -307,7 +307,7 @@ export function patchStateAfterMutation(
 
     case "setMode": {
       const mode = asStr(args.mode);
-      if (!["business", "personal", "creator", "student"].includes(mode)) return prev;
+      if (!["business", "personal", "creator"].includes(mode)) return prev;
       // The other workspace's records are unknown until the refetch
       // lands — never show the old workspace's lists under the new
       // mode's name. The cleared lists must NOT render as the empty
