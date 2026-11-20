@@ -16,8 +16,14 @@
 // - Dates are real yyyy-mm-dd dates in IST; the words "aaj"/"kal"/
 //   "parson" resolve the same way the Smart Add parser does
 //   (aaj = today, kal = yesterday, parson = tomorrow).
-// - A plan the model returns as "confirm" (it is unsure) is never
-//   executed directly, even when the action itself is safe.
+// - ADD PLANS EXECUTE IMMEDIATELY (owner's decision, 2026-11-20):
+//   add_transaction, add_budget, add_savings_goal, deposit_savings,
+//   add_lend_borrow, add_note and add_recurring never wait for a
+//   confirm tap — even when the model returns kind "confirm" for
+//   them (live, 2026-11-20: it did exactly that for "Add ₹500 for
+//   food" in an empty workspace, and the expense never appeared).
+//   Only delete_transaction and change_currency wait. If a detail
+//   is genuinely missing, the model must use "clarify", not "confirm".
 
 export const HOME_CHAT_MAX_CENTS = 100_000_000_00;
 
@@ -80,6 +86,22 @@ export type HomeChatReplyKind = "chat" | "action" | "confirm" | "clarify";
 /** The two plan kinds that never execute without an explicit confirm tap. */
 export function planNeedsConfirm(plan: HomeChatPlan): boolean {
   return plan.kind === "delete_transaction" || plan.kind === "change_currency";
+}
+
+/**
+ * Decides what actually happens with a validated plan, given the
+ * kind the model returned. Only delete_transaction and
+ * change_currency ever wait for a confirm tap. Every safe add plan
+ * executes at once — even when the model hedged with "confirm".
+ * A plan attached to a "chat" reply never executes.
+ */
+export function effectiveReplyKind(
+  modelKind: HomeChatReplyKind,
+  plan: HomeChatPlan,
+): "action" | "confirm" | "chat" {
+  if (planNeedsConfirm(plan)) return "confirm";
+  if (modelKind === "action" || modelKind === "confirm") return "action";
+  return "chat";
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
