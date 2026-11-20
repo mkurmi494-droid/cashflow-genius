@@ -1560,13 +1560,16 @@ async function setInsightStatus(
  *   - condition cleared  → active/expected/snoozed → resolved
  * A 60-second guard keeps a burst of mutations from re-running the
  * rules over and over — the caller (dashboard load, mutation hook)
- * may call this freely. One batch load + a handful of upserts; no
- * LLM, no extra cost.
+ * may call this freely. An explicit Re-check passes { force: true }
+ * to bypass that guard: when the user presses the button, the card
+ * must reflect the ledger as it is right now, not the last run.
+ * One batch load + a handful of upserts; no LLM, no extra cost.
  */
 async function runInsightGeneration(
   db: Db,
   ownerId: string,
   mode: AppModeT,
+  opts?: { force?: boolean },
 ): Promise<{ skipped: boolean; generated: number; active: number }> {
   const now = new Date();
   const runs = await db
@@ -1579,7 +1582,7 @@ async function runInsightGeneration(
       ),
     )
     .limit(1);
-  if (runs[0] && Date.now() - runs[0].generatedAt.getTime() < 60_000) {
+  if (!opts?.force && runs[0] && Date.now() - runs[0].generatedAt.getTime() < 60_000) {
     const actives = await db
       .select({ id: schema.financialInsights.id })
       .from(schema.financialInsights)
@@ -4843,7 +4846,7 @@ export const Actions = {
   generateInsights: defineAction({
     description:
       "Re-runs the deterministic insight rules for the signed-in workspace now (upserts findings, resolves stale ones). Returns the fresh findings with the run, so the panel can show them without waiting on a refetch.",
-    request: z.object({ token: z.string().max(200).optional() }),
+    request: z.object({ token: z.string().max(200).optional(), force: z.boolean().optional() }),
     response: z.object({
       generated: z.number(),
       active: z.number(),
@@ -4855,7 +4858,7 @@ export const Actions = {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
       const wsMode = await activeMode(db, user.id);
-      const res = await runInsightGeneration(db, user.id, wsMode);
+      const res = await runInsightGeneration(db, user.id, wsMode, { force: args.force === true });
       const fresh = await listActiveInsights(db, user.id, wsMode);
       return { ...res, ...fresh };
     },
