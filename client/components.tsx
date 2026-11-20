@@ -1,4 +1,5 @@
 import { useEffect, useMemo, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 // Procedural particle field + glass sphere. Pure CSS/canvas-free DOM so it
 // stays light, works everywhere, and is the fallback "video" background the
@@ -229,7 +230,18 @@ export function Modal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
+  // Rendered through a portal to document.body (2026-11-20): the
+  // picker's `fixed inset-0` backdrop used to sit inside the top
+  // bar, whose backdrop-blur-md makes the header the containing
+  // block for fixed descendants — the backdrop collapsed to the
+  // header's ~60px box and the sheet centred on it, so its header
+  // sat above the viewport and the × was unreachable (three live
+  // failures). In the portal, `fixed` always anchors to the
+  // viewport, wherever the trigger lives. The SSR guard matters:
+  // the Modal only ever opens from a client click, but the file is
+  // rendered on the server too, where document does not exist.
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-[rgba(30,51,41,0.38)] p-0 backdrop-blur-sm sm:items-center sm:p-6"
       role="dialog"
@@ -265,7 +277,8 @@ export function Modal({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
