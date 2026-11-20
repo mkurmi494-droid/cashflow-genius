@@ -377,8 +377,7 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
 }
 
 /** One plain-language line for the confirm card and the done message. */
-export function describePlan(plan: HomeChatPlan, fmt: (cents: number) => string): string {
-  switch (plan.kind) {
+export function describePlan(plan: HomeChatPlan, fmt: (cents: number) => string): string {  switch (plan.kind) {
     case "add_transaction":
       return `${plan.type === "income" ? "Add income" : "Add expense"} ${fmt(plan.amountCents)} · ${plan.category}${plan.description ? ` · ${plan.description}` : ""} · ${plan.date}`;
     case "add_budget":
@@ -400,4 +399,102 @@ export function describePlan(plan: HomeChatPlan, fmt: (cents: number) => string)
     case "change_currency":
       return `Change this workspace's currency to ${plan.currency} (every amount converts at the live rate)`;
   }
+}
+
+const REPLY_KINDS = new Set(["chat", "action", "confirm", "clarify"]);
+const REPLY_WRAPPER_KEYS = ["answer", "response", "result", "data"];
+const REPLY_TEXT_KEYS = ["reply", "answer", "message", "response", "result", "summary"];
+
+export type NormalizedHomeChatReply =
+  | {
+      ok: true;
+      kind: HomeChatReplyKind;
+      reply: string;
+      question: string | null;
+      plan: HomeChatPlan | null;
+      planError: string | null;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Salvages the model's whole reply object into the shape askHomeChat
+ * works with. The model does NOT reliably return the shape the
+ * prompt asks for — live, 2026-11-21, three consecutive answers were
+ * thrown away by a strict schema check even though every one of them
+ * carried a complete, usable instruction:
+ *   1. a BARE plan as the whole answer — {"kind":"edit_transaction",...}
+ *      (no "reply", no "plan" key at all);
+ *   2. an envelope with no reply — {"kind":"action","plan":{...}};
+ *   3. the same envelope around an edit_transaction.
+ * All three failed only because "reply" was required and "kind" had
+ * to be a reply kind. This normaliser accepts all of them:
+ * - a plan in "plan", or the whole object being a plan;
+ * - a missing "reply" (generated from the plan via describePlan, or
+ *   from "question" for a chat/clarify);
+ * - reply text under an alias key (answer/message/response/result/
+ *   summary) and one level of {"answer": {...}} wrapping.
+ * The plan itself is still strictly validated by
+ * normalizeHomeChatPlan — a bad plan is never executed, it only
+ * changes what the reply says. Never throws.
+ */
+export function normalizeHomeChatReply(
+  raw: unknown,
+  today: string,
+  fmt: (cents: number) => string,
+): NormalizedHomeChatReply {
+  if (!isRecord(raw)) return { ok: false, error: "The AI's answer was not an object." };
+  let obj = raw;
+  const keys = Object.keys(obj);
+  if (keys.length === 1 && REPLY_WRAPPER_KEYS.includes(keys[0]) && isRecord(obj[keys[0]])) {
+    obj = obj[keys[0]] as Record<string, unknown>;
+  }
+  // The plan, if any: in "plan", or the whole object IS the plan.
+  let planRaw: unknown | null = null;
+  if (isRecord(obj.plan)) planRaw = obj.plan;
+  else if (typeof obj.kind === "string" && PLAN_KINDS.has(obj.kind)) planRaw = obj;
+  // The reply kind: the model's, or "action" for a bare plan.
+  let kind: HomeChatReplyKind = "chat";
+  if (typeof obj.kind === "string" && REPLY_KINDS.has(obj.kind))
+    kind = obj.kind as HomeChatReplyKind;
+  else if (planRaw !== null) kind = "action";
+  // The reply text: "reply" first, then the aliases the model uses.
+  let reply: string | null = null;
+  for (const k of REPLY_TEXT_KEYS) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim().length > 0) {
+      reply = v.trim();
+      break;
+    }
+  }
+  let question: string | null = null;
+  if (typeof obj.question === "string" && obj.question.trim().length > 0)
+    question = obj.question.trim();
+  // Validate the plan now, so a generated reply can describe it.
+  let plan: HomeChatPlan | null = null;
+  let planError: string | null = null;
+  if (planRaw !== null) {
+    const norm = normalizeHomeChatPlan(planRaw, today);
+    if (norm.ok) plan = norm.plan;
+    else planError = norm.error;
+  }
+  if (reply === null) {
+    if (plan !== null) {
+      const line = describePlan(plan, fmt);
+      reply = planNeedsConfirm(plan)
+        ? `Shall I ${line.charAt(0).toLowerCase()}${line.slice(1)}?`
+        : line;
+    } else if (question !== null) {
+      reply = question;
+    } else if (planError !== null) {
+      // A plan was present but invalid, and the model gave no reply
+      // text at all: the caller reports the plan error, so any short
+      // line works as the reply here.
+      reply = "I couldn't pin down the details.";
+    } else {
+      return { ok: false, error: "The AI's answer had no reply text." };
+    }
+  }
+  if (plan !== null && planNeedsConfirm(plan) && question === null) question = reply;
+  if (plan === null && (kind === "action" || kind === "confirm")) kind = "chat";
+  return { ok: true, kind, reply, question, plan, planError };
 }
