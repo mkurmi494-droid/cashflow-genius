@@ -80,6 +80,11 @@ const MODE_DEFAULT_NAMES: Record<AppModeT, string> = {
 };
 
 function asMode(v: string): AppModeT {
+  // Legacy Student workspaces fold into Personal (Student / First
+  // Salary was removed 2026-11-20): a stored "student" active mode,
+  // or a legacy "student" record mode, resolves to Personal, never
+  // to Business and never to an invalid mode.
+  if (v === "student") return "personal";
   return (APP_MODES as readonly string[]).includes(v) ? (v as AppModeT) : "business";
 }
 
