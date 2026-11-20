@@ -28,6 +28,7 @@ import {
   type InsightInput,
 } from "./lib/insights";
 import { imageReasons, normalizeImageFindings, scoreReasons } from "./lib/scamShield";
+import { RECEIPT_CATEGORIES, emptyReceipt, normalizeReceipt } from "./lib/receipts";
 
 type Db = typeof db;
 
@@ -1344,6 +1345,28 @@ const imageOutShape = z.object({
   dateText: z.string().nullable(),
   statusWording: z.string().nullable(),
   editingSigns: z.string(),
+});
+
+// Shape the vision model must return for a scanned bill/receipt.
+// Amounts are in the receipt's printed currency, as plain numbers
+// (13.60 — never "₹13.60" or "$13.60"). Normalised by
+// server/lib/receipts.ts, which never invents an item or an amount.
+const receiptOutShape = z.object({
+  readable: z.boolean(),
+  merchantName: z.string().nullable(),
+  receiptDate: z.string().nullable(),
+  currencyCode: z.string().default("INR"),
+  totalAmount: z.number().nullable(),
+  items: z
+    .array(
+      z.object({
+        name: z.string(),
+        amount: z.number(),
+        category: z.string(),
+      }),
+    )
+    .default([]),
+  notes: z.string().default(""),
 });
 
 const savingsTransferShape = z.object({
@@ -4186,6 +4209,55 @@ export const Actions = {
         disclaimer:
           "Scam Shield checks for known scam patterns only — it cannot confirm or deny that a payment happened, and a clean result is not a guarantee of safety. Final verification must be done in your bank / UPI app itself: check your transaction history and the UTR/reference number there. Cashflow Genius will never ask for your OTP, UPI PIN or password.",
       };
+    },
+  }),
+
+  analyseReceipt: defineAction({
+    description:
+      "Receipt scan: reads a bill/receipt photo with the AI vision model and returns its line items with categories as a draft. Nothing is recorded — the client shows the draft for the user to check and edit, and only saves what they confirm, one expense per item.",
+    request: z.object({
+      token: z.string().max(200).optional(),
+      imageBase64: z.string().max(9_000_000),
+      imageMimeType: z.enum(["image/jpeg", "image/png"]).optional(),
+    }),
+    response: z.object({
+      readable: z.boolean(),
+      merchantName: z.string().nullable(),
+      receiptDate: z.string().nullable(),
+      currencyCode: z.string(),
+      items: z.array(
+        z.object({
+          name: z.string(),
+          amountCents: z.number(),
+          category: z.string(),
+        }),
+      ),
+      itemsTotalCents: z.number(),
+      receiptTotalCents: z.number().nullable(),
+      totalMismatch: z.boolean(),
+      note: z.string(),
+    }),
+    async handler(ctx, args) {
+      /* db: module singleton (see ./lib/db) */
+      const user = await requireUser(db, args.token);
+      await activeMode(db, user.id);
+      let raw: unknown = null;
+      try {
+        raw = await aiComplete(
+          `You are reading a bill or receipt photo for a money-tracking app. First say in one short phrase what the image actually shows. Then extract ONLY what is visibly printed — never guess or invent an item, an amount or a date. If the image is not a bill or receipt at all (a photo of a car, a person, a payment screenshot), say so and return no items. Return ONLY JSON with exactly these keys, no other keys: readable (true if you can see clearly what the receipt shows, even if some text is faint — false only if it is too blurry, dark, or cropped to read), merchantName (the shop or seller name printed on the receipt, or null), receiptDate (the printed date as YYYY-MM-DD, or null if not visible), currencyCode (the 3-letter code of the currency printed on the receipt, e.g. INR, USD, EUR — or INR if none is printed), totalAmount (the printed TOTAL as a plain number, e.g. 18.60, or null if not visible), items (an array of every line item, each with exactly: name (the item as printed), amount (its printed price as a plain number, e.g. 13.60 — never with a currency symbol), category (pick the best fit from: ${RECEIPT_CATEGORIES.join(", ")} — use General only if nothing fits)), notes (one short phrase about anything unclear, or ""). A discount, tax or tip line is not an item — leave it out.`,
+          {
+            images: [{ dataBase64: args.imageBase64, mimeType: args.imageMimeType ?? "image/jpeg", caption: "Uploaded bill or receipt photo" }],
+            schema: receiptOutShape,
+          },
+          await getAiSettings(user.id),
+        );
+      } catch {
+        raw = null;
+      }
+      // Normalising never invents: a failed call or an unreadable photo
+      // becomes zero items, and the client says so.
+      const receipt = raw === null ? emptyReceipt() : normalizeReceipt(raw);
+      return receipt;
     },
   }),
 
