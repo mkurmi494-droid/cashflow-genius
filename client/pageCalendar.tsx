@@ -400,9 +400,7 @@ export function PaymentCalendarPage({ state, go, notify, notifyDeleted, confirm 
       <div>
         <h1 className="display-font text-[27px] font-semibold tracking-tight">🗓️ What&rsquo;s due — payment calendar</h1>
         <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[var(--dim)]">
-          What to pay on which date, and what to collect on which date — all in one place.
-          Built only from your own records: recurring bills and income, unpaid invoices, pending
-          transactions{personal ? "" : " and EMI instalments you need to collect"}.
+          What to pay and what to collect, on which date.
         </p>
       </div>
 
@@ -488,11 +486,11 @@ export function PaymentCalendarPage({ state, go, notify, notifyDeleted, confirm 
 
       {/* Overdue + upcoming */}
       <section aria-label="Overdue and upcoming payments">
-        <SectionTitle title="Coming up" hint="Overdue items first, then the next two months — from your records, nothing invented." />
+        <SectionTitle title="Coming up" hint="Overdue first, then the next two months." />
         {overdueList.length === 0 && comingList.length === 0 ? (
           <EmptyState
             title="No upcoming payments on record"
-            body="Add a recurring bill in Money Flow, send an invoice, or create an EMI plan, and its dates will appear here automatically."
+            body="Add a recurring bill in Future forecast, send an invoice, or create an EMI plan — its dates appear here automatically."
           />
         ) : (
           <ul className="space-y-2">
@@ -507,7 +505,7 @@ export function PaymentCalendarPage({ state, go, notify, notifyDeleted, confirm 
       <section aria-label="EMI plans">
         <SectionTitle
           title={personal ? "EMI plans" : "EMI plans — products sold on EMI"}
-          hint="Sold a product on EMI? Add the plan once — the calendar will remind you on every due date, and marking an instalment collected adds exactly one income entry."
+          hint="The calendar reminds you on every due date."
           action={
             <button type="button" className="btn-primary shrink-0 px-4 py-2 text-sm" onClick={() => setShowEmiForm(true)}>
               ＋ New EMI plan
@@ -519,7 +517,7 @@ export function PaymentCalendarPage({ state, go, notify, notifyDeleted, confirm 
             title="No EMI plans yet"
             body={personal
               ? "EMI plans are for selling products on instalments. If you ever sell something on EMI, add the plan here and every due date lands on this calendar."
-              : "Add your first EMI plan — customer, product, total amount and instalments — and Cashflow Genius will track every due date, pending and overdue instalment for you."}
+              : "Add your first EMI plan — customer, product, total and instalments — and every due date lands on this calendar."}
             action={
               <button type="button" className="btn-primary px-5 py-2.5 text-sm" onClick={() => setShowEmiForm(true)}>
                 Create an EMI plan
