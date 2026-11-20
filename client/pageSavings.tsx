@@ -198,12 +198,17 @@ function MoveMoneyModal({
   direction,
   onClose,
   notify,
+  onScheduleSkipped,
 }: {
   goal: SavingsGoal;
   currency: string;
   direction: "deposit" | "withdraw";
   onClose: () => void;
   notify: (m: string) => void;
+  // Called when a new schedule's first contribution could not move
+  // (not enough available cash) — the page shows the stuck-schedule
+  // warning immediately instead of only on the next app open.
+  onScheduleSkipped?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("");
@@ -256,6 +261,7 @@ function MoveMoneyModal({
       void queryClient.invalidateQueries({ queryKey: ["cg-combined"] });
       void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
       const every = frequency === "monthly" ? "every month" : "every year";
+      if (!res.firstApplied) onScheduleSkipped?.();
       notify(
         res.firstApplied
           ? `${fmtMoney(amountCents, currency)} moved into “${goal.name}” now, and will move again ${every}. Cancel it anytime from the goal card.`
@@ -650,6 +656,9 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
     mutationFn: (id: string) => api.cancelSavingsSchedule({ id }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["cg-savings-schedules"] });
+      // The stuck-schedule warning (if shown) no longer applies once
+      // the schedule is cancelled — the next app open re-derives it.
+      setApplyResult(null);
       notify("Recurring savings cancelled — money already in the pot stays there.");
     },
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
@@ -783,6 +792,7 @@ export function SavingsPage({ state, notify, notifyDeleted }: PageProps) {
           direction={moving.direction}
           onClose={() => setMoving(null)}
           notify={notify}
+          onScheduleSkipped={() => setApplyResult({ applied: 0, skipped: 1 })}
         />
       ) : null}
       {deleting ? (
