@@ -2360,6 +2360,7 @@ export const Actions = {
           savingsGoals: 0,
           savingsTransfers: 0,
           lendBorrow: 0,
+          savingsSchedules: 0,
         };
         if (effectiveConverting) {
           // One SQL fragment per column: ROUND(col * rate) as bigint.
@@ -2446,6 +2447,18 @@ export const Actions = {
               .set({ amountCents: conv(schema.lendBorrow.amountCents) })
               .where(owned(schema.lendBorrow.ownerId, schema.lendBorrow.mode))
               .returning({ id: schema.lendBorrow.id })
+          ).length;
+          // Recurring savings schedules carry a real amount (the next
+          // auto-contribution) — it must convert with everything else,
+          // or the schedule would move the old-currency amount after
+          // the switch. (Missed until 2026-11-20: a currency change
+          // left schedule amounts unconverted.)
+          counts.savingsSchedules = (
+            await tx
+              .update(schema.savingsSchedules)
+              .set({ amountCents: conv(schema.savingsSchedules.amountCents) })
+              .where(owned(schema.savingsSchedules.ownerId, schema.savingsSchedules.mode))
+              .returning({ id: schema.savingsSchedules.id })
           ).length;
           // Genius Insights are priced in the old currency — drop the
           // last-run marker so getInsights regenerates them in the new
