@@ -37,7 +37,7 @@ import { AppTour } from "./appTour";
 import { InstallButton } from "./pwa";
 
 // `group: "business"` modules are the business money-management tools. In
-// the everyday modes (Personal Money, Student / First Salary) they stay
+// the everyday mode (Personal Money) they stay
 // fully reachable but are visually de-emphasised and grouped under a
 // "Business tools" heading; in the business-like modes (Business Money,
 // Creator & Freelancer) every module is presented equally. Each mode is a
@@ -89,7 +89,7 @@ function Welcome({
   const personal = isPersonalLike(appMode);
   const creator = appMode === "creator";
   const defaultSpaceName =
-    appMode === "personal" ? "My Money" : appMode === "student" ? "My Student Budget" : "My Creator Studio";
+    appMode === "personal" ? "My Money" : "My Creator Studio";
 
   const finish = useMutation({
     mutationFn: async () => {
@@ -155,9 +155,7 @@ function Welcome({
       >
         <h1 className="text-xl font-extrabold">
           {personal
-            ? appMode === "student"
-              ? "Set up your student money"
-              : "Set up your everyday money"
+            ? "Set up your everyday money"
             : creator
               ? "Set up your creator workspace"
               : "Set up your business"}
@@ -782,7 +780,7 @@ function QuickAdd({
             Make draft from this phrase →
           </button>
           <p className="text-[11px] leading-relaxed text-[var(--dim)]">
-            The draft is made only in this workspace ({mode === "personal" ? "Personal Money" : mode === "creator" ? "Creator & Freelancer" : mode === "student" ? "Student / First Salary" : "Business Money"}) — nothing goes to another workspace.
+            The draft is made only in this workspace ({mode === "personal" ? "Personal Money" : mode === "creator" ? "Creator & Freelancer" : "Business Money"}) — nothing goes to another workspace.
           </p>
         </div>
       ) : null}
@@ -2258,8 +2256,8 @@ export function App() {
         </div>
       </header>
 
-      {/* One-tap workspace switcher: Personal and Business (and Creator /
-          Student) can be used together — both stay saved at the same time,
+      {/* One-tap workspace switcher: Personal and Business (and Creator)
+          can be used together — both stay saved at the same time,
           each with its own records. Switching only opens the other
           workspace; it never moves, merges or deletes anything. The
           Command Center shows both totals side by side plus a combined
