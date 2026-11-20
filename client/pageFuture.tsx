@@ -205,8 +205,8 @@ export function FutureLensPage({ state, notify, notifyDeleted, confirm, saveToVa
         {state.recurring.length === 0 ? (
           <p className="text-sm text-[var(--dim)]">
             {personal
-              ? "No schedules yet. Add your monthly salary, rent or regular bills and Future Lens will project them forward automatically."
-              : "No schedules yet. Add monthly salaries, rent or a client retainer and Future Lens will project them forward automatically."}
+              ? "No schedules yet — add one and the forecast projects it forward."
+              : "No schedules yet — add one and the forecast projects it forward."}
           </p>
         ) : (
           <ul className="divide-y divide-[var(--border)]">
@@ -501,7 +501,7 @@ export function WhatIfPage({ state, notify, notifyDeleted, confirm, saveToVault 
         onChange={(e) => setSim((p) => ({ ...p, [key]: Number(e.target.value) }))}
         className="mt-1 w-full accent-[#7C3AED]"
       />
-      <p className="text-xs text-[var(--dim)]">{hint}</p>
+      {hint ? <p className="text-xs text-[var(--dim)]">{hint}</p> : null}
     </div>
   );
 
@@ -547,19 +547,19 @@ export function WhatIfPage({ state, notify, notifyDeleted, confirm, saveToVault 
               <SectionTitle title="Decision levers" />
               {personal ? (
                 <>
-                  {slider("Income change", "salesPct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "Applied to your monthly income run-rate, e.g. a raise or a side income.")}
-                  {slider("Spending change", "expensePct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "Applied across your monthly spending.")}
-                  {slider("Monthly cost change (rent, EMIs, help)", "salaryDelta", -100000, 300000, 5000, (v) => fmtMoney(v * 100, cur), "Add or remove a regular monthly cost, e.g. a rent rise or a new EMI.")}
-                  {slider("Lifestyle spending change", "marketingDelta", -50000, 200000, 2500, (v) => fmtMoney(v * 100, cur), "Extra (or less) monthly spending on shopping, eating out and fun.")}
+                  {slider("Income change", "salesPct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "")}
+                  {slider("Spending change", "expensePct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "")}
+                  {slider("Monthly cost change (rent, EMIs, help)", "salaryDelta", -100000, 300000, 5000, (v) => fmtMoney(v * 100, cur), "")}
+                  {slider("Lifestyle spending change", "marketingDelta", -50000, 200000, 2500, (v) => fmtMoney(v * 100, cur), "")}
                   {slider("Income actually received", "paymentPct", 40, 100, 1, (v) => `${v}%`, "Share of expected income that actually lands in the period.")}
                   {slider("Income delay", "delayDays", 0, 60, 1, (v) => `${v} days`, "Late salary or freelance payments strain cash even when the month looks fine — reflected in assumptions.")}
                 </>
               ) : (
                 <>
-                  {slider("Sales change", "salesPct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "Applied to monthly revenue run-rate.")}
-                  {slider("Expense change", "expensePct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "Applied across monthly expenses.")}
-                  {slider("Salary change (per month)", "salaryDelta", -100000, 300000, 5000, (v) => fmtMoney(v * 100, cur), "Add or remove monthly salary cost, e.g. a new hire.")}
-                  {slider("Marketing budget change", "marketingDelta", -50000, 200000, 2500, (v) => fmtMoney(v * 100, cur), "Extra (or less) monthly marketing spend.")}
+                  {slider("Sales change", "salesPct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "")}
+                  {slider("Expense change", "expensePct", -50, 100, 1, (v) => `${v > 0 ? "+" : ""}${v}%`, "")}
+                  {slider("Salary change (per month)", "salaryDelta", -100000, 300000, 5000, (v) => fmtMoney(v * 100, cur), "")}
+                  {slider("Marketing budget change", "marketingDelta", -50000, 200000, 2500, (v) => fmtMoney(v * 100, cur), "")}
                   {slider("Customer payments collected", "paymentPct", 40, 100, 1, (v) => `${v}%`, "Share of simulated revenue actually collected in the period.")}
                   {slider("Payment delay", "delayDays", 0, 60, 1, (v) => `${v} days`, "Longer delays strain cash even when profit looks fine — reflected in assumptions.")}
                 </>
