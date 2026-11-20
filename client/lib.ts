@@ -290,7 +290,7 @@ export function allKnownCategories(state: State): string[] {
 
 /** How money moved. UPI is listed first — it is a first-class payment
  *  method here, recorded by the user on each transaction (there is no
- *  automatic bank/UPI sync; see Settings → Live connections). */
+ *  automatic bank/UPI sync). */
 export const PAYMENT_METHODS = ["UPI", "Cash", "Card", "Bank transfer", "Other"] as const;
 
 export const NOTE_CATEGORIES = [
