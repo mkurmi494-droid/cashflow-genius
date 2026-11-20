@@ -5,6 +5,7 @@ import { MODE_ICONS, MODE_LABELS, NOTE_CATEGORIES, currencyConfirmOptions, downl
 import type { PageProps } from "./types";
 import { Badge, EmptyState, Field, Modal, ModePicker, SectionTitle } from "./components";
 import { CurrencyPicker } from "./currencyPicker";
+import { AppUpdateFooter } from "./appUpdate";
 import {
 CURSOR_OPTIONS,
 applyCursorStyle,
@@ -1205,6 +1206,7 @@ export function SettingsPage({ state, go, notify, notifyDeleted, confirm, onShow
               </button>
             ))}
           </div>
+          <AppUpdateFooter />
         </>
       )}
     </div>
