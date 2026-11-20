@@ -16,6 +16,7 @@ export type Route =
   | "scam-shield"
   | "savings"
   | "lend-borrow"
+  | "money-tools"
   | "settings";
 
 export interface PageProps {
