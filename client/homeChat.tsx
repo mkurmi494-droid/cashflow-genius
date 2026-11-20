@@ -87,6 +87,9 @@ export function HomeChatFab({ mode }: { mode: string }) {
         .slice(-8)
         .map((m) => ({ role: m.role, text: m.text }));
       const res = await api.askHomeChat({ message, history, confirmedPlan });
+      if (!res || typeof res !== "object" || typeof res.reply !== "string") {
+        throw new Error("I couldn't reach the AI just now — nothing was changed. Try again in a bit.");
+      }
       const asst: ChatMsg = {
         id: uid(),
         role: "assistant",
