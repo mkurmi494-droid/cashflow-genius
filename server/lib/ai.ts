@@ -298,7 +298,7 @@ function ruleBasedFallback(
     return {
       kind: "chat",
       reply:
-        `The AI could not be reached just now — ${engine} did not answer. Nothing was changed. Try again in a bit.`,
+        "The AI's answer could not be used just now — nothing was changed. Try again in a bit.",
     };
   }
   return null;
