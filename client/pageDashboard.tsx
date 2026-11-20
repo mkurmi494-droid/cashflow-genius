@@ -417,7 +417,9 @@ function GeniusInsightsPanel({ state, go, notify }: { state: PageProps["state"];
     onError: (e) => notify(e instanceof Error ? e.message : String(e)),
   });
   const refresh = useMutation({
-    mutationFn: () => api.generateInsights({}),
+    // Explicit Re-check: force the run past the 60-second guard so the
+    // card reflects the ledger as it is right now.
+    mutationFn: () => api.generateInsights({ force: true }),
     onSuccess: (res) => {
       // The regeneration already computed the fresh findings — write
       // them straight into the cache so the panel shows the new card
