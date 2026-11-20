@@ -34,31 +34,31 @@ const STEPS: AppTourStep[] = [
   {
     icon: "👋",
     title: "Welcome to Cashflow Genius",
-    body: "“See money before it moves.” This quick tour walks through everything the app can do — about a minute, step by step. Skip it any time with Skip or ✕ above; you can reopen it later from Settings → App tour & help.",
+    body: "A 1-minute walkthrough of everything the app can do. Skip any time.",
     route: "dashboard",
   },
   {
     icon: "◉",
     title: "Home — your Command Center",
-    body: "Home shows your available cash, this month's money in and out, how much is sitting in savings pots, and a money health score — plus a “Personal + Business — together” view of your workspaces side by side. Everything here is calculated live from your own records.",
+    body: "Available cash, this month's money in and out, savings pots, health score — all live from your records.",
     route: "dashboard",
   },
   {
     icon: "▤",
     title: "Three money modes, fully separate",
-    body: "Personal Money, Business Money and Creator & Freelancer are three completely separate workspaces — own records, own budgets, own savings. Switch any time from the bar under the top bar or in Settings; switching never moves or mixes a single record.",
+    body: "Three completely separate workspaces — own records, budgets, savings. Switch any time; switching never moves or mixes a record.",
     route: "settings",
   },
   {
     icon: "≋",
     title: "Money in & out",
-    body: "Your ledger: every income and expense with category, payee and payment method (UPI, cash, card, bank transfer). Add entries by hand, import a bank CSV (exact duplicates are skipped automatically), and edit or delete anything — deletes come with an Undo button.",
+    body: "Every income and expense, with category, payee and payment method. Add by hand or import a CSV; deletes come with Undo.",
     route: "money-flow",
   },
   {
     icon: "＋",
     title: "Quick Add — type it, say it, or paste it",
-    body: "The big + button (bottom centre on phones, gold Add button on Home on desktop) is the fastest way in. Three ways: type it · tap 🎤 Voice and say “paid 500 for chai” · or 📩 paste a bank/UPI SMS and it fills the form for you. Voice and SMS only ever make a draft — nothing is saved until you review and confirm, and a pasted message is never treated as proof of payment.",
+    body: "The fastest way in: type it, say it (🎤 Voice), or paste a bank/UPI SMS (📩). Drafts only — nothing saves until you confirm, and a message is never proof of payment.",
     route: "money-flow",
     action: "quickAdd",
     actionLabel: "Open Quick Add now",
@@ -66,43 +66,43 @@ const STEPS: AppTourStep[] = [
   {
     icon: "🗓",
     title: "What's due — the Money Calendar",
-    body: "A month calendar plus an overdue-first list of everything coming: recurring bills, unpaid invoices, pending payments and EMI instalments — what you must pay and what you're due to collect, on the exact date. Collecting an EMI instalment records the income exactly once.",
+    body: "A month calendar plus an overdue-first list of everything coming — what to pay and what to collect, on the exact date.",
     route: "payment-calendar",
   },
   {
     icon: "🪙",
     title: "Savings goals",
-    body: "Create a pot for anything — emergency fund, a laptop, a trip — with a target and a date. Add or withdraw money any time; the app shows saved so far, what's left, progress % and whether your pace is on track. Money in pots is set aside, not spent, and available cash everywhere already excludes it.",
+    body: "Pots with a target and date. Add or withdraw any time; saved so far, what's left and your pace are all shown.",
     route: "savings",
   },
   {
     icon: "⌖",
     title: "Find leaks & budgets",
-    body: "The Leak Scanner reads your real transactions and flags duplicate subscriptions, price hikes and unusual spikes — with the exact amounts. Set a monthly budget per category on the same page and watch spending against it, in this workspace only.",
+    body: "Flags duplicate subscriptions, price hikes and unusual spikes, with exact amounts. Set a monthly budget per category here too.",
     route: "profit-scanner",
   },
   {
     icon: "✦",
     title: "AI CFO — ask anything",
-    body: "Ask about your money in English or Hindi (“When will my cash run out?”). Every answer is grounded in your real figures and shows “What the AI used” — the exact amounts and dates it calculated from — so nothing is ever invented. Try the suggested questions to start.",
+    body: "Ask in English or Hindi. Every answer is grounded in your real figures, with “What the AI used” shown — nothing invented.",
     route: "ai-cfo",
   },
   {
     icon: "▤",
     title: "Invoices with GST",
-    body: "Create invoices with line items, discount and GST, send them, and mark them paid — the payment lands in your ledger exactly once, linked to the invoice, never double-counted. Overdue invoices surface on Home and in What's due automatically.",
+    body: "Create invoices with line items, discount and GST, send them, mark them paid. Overdue invoices surface on Home and in What's due.",
     route: "invoices",
   },
   {
     icon: "🛡",
     title: "Scam Shield",
-    body: "Got a suspicious UPI or payment message? Paste it (or a payment screenshot claim) here and get a plain-language verdict with the exact signs it found. It never asks for an OTP or PIN, and it always reminds you: a message is never proof of payment — verify in your bank/UPI app.",
+    body: "Paste a suspicious UPI message or payment screenshot for a plain-language verdict. It never asks for an OTP or PIN; a message is never proof of payment.",
     route: "scam-shield",
   },
   {
     icon: "▦",
     title: "Reports, forecast & what-if",
-    body: "Reports break your money down by category and month; the Future forecast projects what's coming; and the What-if planner lets you test “what if sales drop 20%?” against your real run-rate before it happens. That's the tour — your workspace starts empty, with only your own records. Add your first entry whenever you're ready.",
+    body: "Reports by category and month, a Future forecast, and a What-if planner to test decisions against your real run-rate.",
     route: "reports",
   },
 ];
@@ -234,8 +234,7 @@ export function AppTour({
             </button>
           )}
           <span className="text-xs text-[var(--dim)]">
-            The tour only navigates and explains — it never edits your data. Reopen it any
-            time from Settings → App tour &amp; help.
+            The tour only navigates and explains — it never edits your data.
           </span>
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5" aria-hidden>
