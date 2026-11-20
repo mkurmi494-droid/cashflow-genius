@@ -13,6 +13,7 @@
 // brackets, unary minus, and % as a postfix percent (50% = 0.5).
 
 import { useEffect, useRef, useState } from "react";
+import { CalcIcon } from "./components";
 
 interface CalcHistoryItem {
   expr: string;
@@ -477,7 +478,7 @@ export function CalculatorPanel({
 
         <div className="mb-2 flex items-center justify-between gap-2 pl-6 sm:pl-7">
           <h2 className="flex items-center gap-2 text-base font-extrabold">
-            <span aria-hidden>🧮</span> Calculator
+            <CalcIcon className="h-5 w-5" /> Calculator
           </h2>
           <button
             type="button"
