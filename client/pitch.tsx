@@ -13,23 +13,19 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
       <div>
         <h3 className="text-sm font-extrabold">The problem</h3>
         <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
-          India&rsquo;s small businesses and salaried earners run on UPI, cash and credit at the
-          same time. Money apps either track the past (what you spent) or do full accounting
-          (what your CA needs) — almost none answer the question that actually keeps people
-          up at night: <strong className="text-[var(--text)]">“What happens to my money next?”</strong>{" "}
-          Cashflow Genius is built around that one question — <em>see money before it moves</em>:
-          a forward forecast, a payment calendar of what&rsquo;s due, a leak scanner, savings
-          pace, and an AI CFO that answers from your real figures.
+          Money apps track the past or do full accounting — almost none answer <strong className="text-[var(--text)]">“What happens to my money next?”</strong>{" "}
+          Cashflow Genius is built around that question: a forecast, a payment calendar, a leak
+          scanner, savings pace, and an AI CFO that answers from your real figures.
         </p>
       </div>
 
       <div>
         <h3 className="text-sm font-extrabold">India-first, by design</h3>
         <ul className="mt-1 list-disc space-y-1 pl-5 text-sm leading-relaxed text-[var(--dim)]">
-          <li><strong className="text-[var(--text)]">UPI first:</strong> UPI is the first payment method on every entry, with voice entry (“paid 500 for chai”) and paste-a-bank-SMS import that always asks you to confirm — and always tells you to verify in your bank/UPI app.</li>
+          <li><strong className="text-[var(--text)]">UPI first:</strong> UPI first on every entry, with voice entry and paste-a-bank-SMS import — always confirmed by you, always verified in your bank/UPI app.</li>
           <li><strong className="text-[var(--text)]">INR + GST native:</strong> Indian numbering, GST-ready invoices with a GSTR-1 style export, EMI plans for products sold on instalments.</li>
-          <li><strong className="text-[var(--text)]">Multilingual AI CFO:</strong> ask in English or Hindi; answers come back in the language you asked in, grounded in your own numbers — with the exact figures and dates used shown under every answer.</li>
-          <li><strong className="text-[var(--text)]">Scam Shield:</strong> fake UPI messages and payment-screenshot claims are checked for scam signs, because in India the fraud arrives on the same phone as the money.</li>
+          <li><strong className="text-[var(--text)]">Multilingual AI CFO:</strong> Ask in English or Hindi; answers come back in your language, grounded in your numbers, with sources shown.</li>
+          <li><strong className="text-[var(--text)]">Scam Shield:</strong> Fake UPI messages and payment screenshots checked for scam signs.</li>
         </ul>
       </div>
 
@@ -85,8 +81,8 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
       <div>
         <h3 className="text-sm font-extrabold">Honest limits — we say these before you ask</h3>
         <ul className="mt-1 list-disc space-y-1 pl-5 text-sm leading-relaxed text-[var(--dim)]">
-          <li><strong className="text-[var(--text)]">No live bank/UPI auto-sync:</strong> there is no UPI API for apps like this, and we never read your SMS in the background. Entry is Quick Add, voice, CSV import, or paste-a-message with your confirmation — and the app never shows a bank feed it doesn't have.</li>
-          <li><strong className="text-[var(--text)]">Supabase powers Google sign-in and email verification; Gemini is not connected.</strong> “Continue with Google” runs through Supabase Auth with the Google provider enabled, email sign-ups are verified by tapping the confirmation link Supabase emails to the user&rsquo;s own inbox. Accounts and data run on this workspace&rsquo;s own database; the AI CFO runs on ChatGPT, grounded in your figures. We never display a connection we don&rsquo;t have.</li>
+          <li><strong className="text-[var(--text)]">No live bank/UPI auto-sync:</strong> there is no UPI API for apps like this. Entry is Quick Add, voice, CSV import, or paste-a-message with your confirmation.</li>
+          <li><strong className="text-[var(--text)]">Supabase powers Google sign-in and email verification; Gemini is not connected.</strong> The AI CFO runs on ChatGPT, grounded in your figures. We never display a connection we don&rsquo;t have.</li>
           <li><strong className="text-[var(--text)]">Forecasts are estimates,</strong> calculated from your recorded dues and schedules, with their assumptions listed — never guarantees.</li>
         </ul>
       </div>
@@ -94,22 +90,14 @@ export function WhyCashflowGenius({ compact = false }: { compact?: boolean }) {
       <div>
         <h3 className="text-sm font-extrabold">Your data &amp; privacy</h3>
         <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
-          Every account gets its own private data that starts empty, and each of the three money modes
-          (Personal, Business, Creator &amp; Freelancer) is a completely separate
-          workspace — records never mix. Full JSON backup and restore are
-          built in, deletes come with Undo, and permanent account deletion is available in
-          Settings — your data leaves when you say so.
+          Every account starts empty and private. The three money modes are completely separate workspaces. Full JSON backup and restore are built in, deletes come with Undo, and account deletion is in Settings.
         </p>
       </div>
 
       <div>
         <h3 className="text-sm font-extrabold">Business model (the plan)</h3>
         <p className="mt-1 text-sm leading-relaxed text-[var(--dim)]">
-          <strong className="text-[var(--text)]">Free basic, forever:</strong> ledger, budgets, calendar, invoices and
-          reports. <strong className="text-[var(--text)]">Pro (planned):</strong> the AI CFO and advanced reports for
-          businesses and creators who live in their numbers. In this hackathon build nothing
-          is paywalled — every feature is open so judges can test all of it — and there are no
-          ads and no loan offers, ever.
+          <strong className="text-[var(--text)]">Free basic, forever.</strong> <strong className="text-[var(--text)]">Pro (planned):</strong> the AI CFO and advanced reports. In this build nothing is paywalled, and there are no ads and no loan offers, ever.
         </p>
       </div>
     </div>
