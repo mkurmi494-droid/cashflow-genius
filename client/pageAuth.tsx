@@ -513,9 +513,6 @@ export function PublicHome({
           <div className="mt-3">
             <WhyCashflowGenius compact />
           </div>
-          <p className="mt-2 text-xs text-[var(--dim)]">
-            The full version, with the comparison table, is inside the app in Settings → Why Cashflow Genius?
-          </p>
         </details>
       </div>
     </div>
@@ -703,7 +700,7 @@ export function SignupScreen({
   return (
     <AuthCard
       title="Create your account"
-      subtitle="Continue with Google, or sign up with your email. Your own private workspace — it starts empty, with only your records."
+      subtitle="Continue with Google, or sign up with your email."
     >
       <GoogleSignIn notify={notify} />
       <OrDivider label="or sign up with email" />
@@ -869,7 +866,7 @@ export function VerifyScreen({
   return (
     <AuthCard
       title="Check your email"
-      subtitle={`We emailed a confirmation link to ${identifier || "your email address"}. Tap the link in the email to finish setting up your account — it stays valid for 1 hour. If your email also contains a 6-digit code, you can enter it below instead.`}
+      subtitle={`We emailed a confirmation link to ${identifier || "your email address"}. Tap it to finish setting up — it stays valid for 1 hour. If your email also contains a 6-digit code, you can enter it below instead.`}
     >
       <div className="space-y-4">
         <p className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] px-4 py-3 text-left text-xs leading-relaxed text-[var(--dim)]">
