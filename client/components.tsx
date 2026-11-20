@@ -220,6 +220,11 @@ export function Modal({
   // Escape closes the sheet, and the header stays pinned while the
   // content scrolls — on a phone the list can be taller than the
   // screen, and the close button must never scroll out of reach.
+  // Two mechanisms keep it pinned: the header has NO negative
+  // margins (they broke sticking), and the cg-modal-in keyframe ends
+  // opacity-only so no transform survives on the sheet (a persisted
+  // transform defeated the stick — the currency picker's × kept
+  // scrolling away until this was fixed, live-found 2026-11-20).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -236,12 +241,12 @@ export function Modal({
       onClick={onClose}
     >
       <div
-        className={`glass rise max-h-[92vh] w-full overflow-y-auto rounded-t-3xl p-5 sm:rounded-3xl ${
+        className={`glass rise max-h-[92vh] w-full overflow-y-auto rounded-t-3xl sm:rounded-3xl ${
           wide ? "sm:max-w-2xl" : "sm:max-w-lg"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 flex items-center justify-between gap-3 rounded-t-3xl bg-[var(--surface)] px-5 pb-3 pt-5">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-3xl bg-[var(--surface)] px-5 pb-3 pt-5">
           <h3 className="text-lg font-extrabold">{title}</h3>
           <button
             type="button"
@@ -252,7 +257,7 @@ export function Modal({
             ×
           </button>
         </div>
-        {children}
+        <div className="px-5 pb-5 pt-4">{children}</div>
       </div>
     </div>
   );
