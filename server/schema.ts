@@ -485,6 +485,31 @@ export const savingsSchedules = pgTable("savings_schedules", {
     .defaultNow(),
 });
 
+export const lendBorrow = pgTable("lend_borrow", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull().default("legacy"),
+  mode: text("mode").notNull().default("business"), // workspace this entry belongs to
+  // lent = money I gave, owed to me; borrowed = money I took, I owe.
+  direction: text("direction", { enum: ["lent", "borrowed"] }).notNull(),
+  person: text("person").notNull(), // who the money went to / came from
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // always positive
+  date: text("date").notNull(), // yyyy-mm-dd (IST) when it happened
+  dueDate: text("due_date"), // yyyy-mm-dd (IST), null = no due date
+  note: text("note").notNull().default(""),
+  // open = still owed; settled = paid back. Settling only closes the
+  // entry — it never creates a transaction (see server/lib/lendBorrow.ts).
+  status: text("status", { enum: ["open", "settled"] })
+    .notNull()
+    .default("open"),
+  settledDate: text("settled_date"), // yyyy-mm-dd (IST), null until settled
+  createdAt: timestamp("created_at", { mode: "date" })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "date" })
+    .notNull()
+    .defaultNow(),
+});
+
 export const savingsTransfers = pgTable("savings_transfers", {
   id: text("id").primaryKey(),
   goalId: text("goal_id").notNull(),
