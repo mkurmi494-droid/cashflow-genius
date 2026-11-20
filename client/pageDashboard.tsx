@@ -40,7 +40,7 @@ import { AnimatedMoney, AnimatedProgress, Reveal } from "./anim";
 const PIE_COLORS = ["#7C3AED", "#D946EF", "#FB7185", "#FB923C", "#38BDF8", "#A78BFA", "#F472B6"];
 
 // ---------- Both modes together ----------
-// Personal and Business (plus Creator / Student when used) stay fully
+// Personal and Business (plus Creator when used) stay fully
 // separate workspaces — their records are never merged. This panel only
 // READS each workspace's own totals (via getCombinedSummary, which never
 // changes the active workspace) and shows them side by side, with a
@@ -92,7 +92,7 @@ function DualModePanel({ state, notify, confirm }: { state: PageProps["state"]; 
   const cur = data?.currency ?? state.business.currency;
   const mainTwo = data?.workspaces.filter((w) => w.mode === "personal" || w.mode === "business") ?? [];
   const others = data?.workspaces.filter(
-    (w) => (w.mode === "creator" || w.mode === "student") && (w.exists || w.txnCount > 0),
+    (w) => w.mode === "creator" && (w.exists || w.txnCount > 0),
   ) ?? [];
 
   return (
