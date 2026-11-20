@@ -56,8 +56,8 @@ import {
 } from "./lib/lendBorrow";
 import {
   describePlan,
+  effectiveReplyKind,
   normalizeHomeChatPlan,
-  planNeedsConfirm,
   type HomeChatPlan,
 } from "./lib/homeChat";
 
@@ -6447,7 +6447,7 @@ OWNER'S MESSAGE: ${args.message}
 Return EXACTLY this JSON shape, with these exact keys: {"kind": "chat" | "action" | "confirm" | "clarify", "reply": "...", "question": "...", "plan": {...}} — omit "question" and "plan" when they do not apply.
 - "chat": just talking or answering — no work to do. "reply" is the answer.
 - "action": the request is clear, complete and safe. Put the full plan in "plan". Use this ONLY for: add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note, add_recurring. NEVER use "action" for a delete or a currency change.
-- "confirm": the request is a delete or a currency change, OR you are unsure about an amount, a date, a category, a goal name or which record is meant. Put your best-guess plan in "plan" and what you are unsure about in "question".
+- "confirm": ONLY when the request is a delete or a currency change. NEVER use "confirm" for an add of any kind — add_transaction, add_budget, add_savings_goal, deposit_savings, add_lend_borrow, add_note and add_recurring always execute immediately with "action", even if you feel unsure (if a detail is genuinely missing, use "clarify" and ask instead of guessing). Put the plan in "plan" and what it does in "question".
 - "clarify": something essential is missing (no amount, no date, no name, no goal). Put the question in "question" and no plan.
 Plan shapes (exact keys, no others). IMPORTANT: "plan" IS the plan object itself — {"kind":"add_transaction",...}. NEVER wrap it in a key named after its kind (no {"add_transaction": {...}}).
 - add_transaction: {"kind":"add_transaction","type":"income"|"expense","amountCents":number,"category":"...","description":"...","counterparty":"...","date":"yyyy-mm-dd"}
@@ -6497,8 +6497,11 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
           question: norm.error,
         };
       const plan = norm.plan;
-      // A delete or a currency change never executes on the model's word alone.
-      if (raw.kind === "confirm" || planNeedsConfirm(plan)) {
+      // Only a delete or a currency change waits for a confirm tap.
+      // Every safe add plan executes at once, even when the model
+      // hedged with kind "confirm" (live, 2026-11-20).
+      const effective = effectiveReplyKind(raw.kind, plan);
+      if (effective === "confirm") {
         let match: { id: string; label: string } | null = null;
         if (plan.kind === "delete_transaction") {
           const found = await resolveDeleteMatch(user.id, wsMode, plan);
@@ -6517,7 +6520,7 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
           confirm: { plan, summary: describePlan(plan, fmt), match },
         };
       }
-      if (raw.kind !== "action")
+      if (effective !== "action")
         return { reply: replyText, kind: "chat" as const };
       const done = await executeHomeChatPlan(ctx, user.id, wsMode, business, plan, args.token, today);
       if (!done.ok) return { reply: done.error, kind: "clarify" as const };
