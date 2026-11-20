@@ -1,14 +1,6 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-async function fileToBase64(file: File): Promise<{ dataBase64: string; mimeType: string }> {
-  const buf = await file.arrayBuffer();
-  let s = "";
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)) as unknown as number[]);
-  }
-  return { dataBase64: btoa(s), mimeType: file.type };
-}
+import { fileToBase64 } from "./lib";
 
 import { api, type ApiResponse } from "./api";
 import { prettyDate } from "./lib";
