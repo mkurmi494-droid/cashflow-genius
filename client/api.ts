@@ -162,6 +162,11 @@ const READ_ONLY_ACTIONS = new Set([
   // would refetch the whole ledger for nothing). The App listener
   // invalidates ["cg-insights"] itself after firing it.
   "generateInsights",
+  // askHomeChat usually only talks (no write), so it must not dispatch
+  // cg:mutated on every message — that would refetch the whole ledger
+  // for a chat reply. When the reply actually wrote something
+  // (response.done), the chat component dispatches cg:mutated itself.
+  "askHomeChat",
 ]);
 
 function notifyMutation(
