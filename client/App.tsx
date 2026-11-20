@@ -24,6 +24,7 @@ import { FutureLensPage, WhatIfPage } from "./pageFuture";
 import { InvoicesPage } from "./pageInvoices";
 import { PaymentCalendarPage } from "./pageCalendar";
 import { SavingsPage } from "./pageSavings";
+import { LendBorrowPage } from "./pageLend";
 import { CalculatorPanel } from "./calculator";
 import { ConfirmDialog, UndoToast, useSafety } from "./safety";
 import { applyCursorStyle, DEFAULT_CURSOR_STYLE } from "./cursor";
@@ -50,6 +51,7 @@ const NAV: { route: Route; label: string; short: string; icon: string; path: str
   { route: "money-flow", label: "Money in & out", short: "Money", icon: "≋", path: "app/money-flow", group: "core" },
   { route: "payment-calendar", label: "What's due — calendar", short: "Due", icon: "🗓", path: "app/payment-calendar", group: "core" },
   { route: "savings", label: "Savings goals", short: "Save", icon: "🪙", path: "app/savings", group: "core" },
+  { route: "lend-borrow", label: "Lend & borrow", short: "Lend", icon: "⇄", path: "app/lend-borrow", group: "core" },
   { route: "ai-cfo", label: "AI CFO — ask anything", short: "AI CFO", icon: "✦", path: "app/ai-cfo", group: "core" },
   { route: "future-lens", label: "Future forecast", short: "Future", icon: "◎", path: "app/future-lens", group: "core" },
   { route: "what-if-lab", label: "What-if planner", short: "What-if", icon: "⚗", path: "app/what-if-lab", group: "core" },
@@ -2612,6 +2614,8 @@ function MainContent({
       return <ScamShieldPage {...pageProps} />;
     case "savings":
       return <SavingsPage {...pageProps} />;
+    case "lend-borrow":
+      return <LendBorrowPage {...pageProps} />;
     case "settings":
       return <SettingsPage {...pageProps} />;
     default:
