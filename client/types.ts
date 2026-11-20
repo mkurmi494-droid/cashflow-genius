@@ -15,6 +15,7 @@ export type Route =
   | "memory-vault"
   | "scam-shield"
   | "savings"
+  | "lend-borrow"
   | "settings";
 
 export interface PageProps {
