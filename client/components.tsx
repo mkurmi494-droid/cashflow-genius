@@ -384,17 +384,6 @@ export function ModePicker({
         "A separate workspace for your creator/freelance books",
       ],
     },
-    {
-      id: "student",
-      icon: "🎓",
-      title: "Student / First Salary",
-      body: "Pocket money, part-time work or a first salary — simple and separate.",
-      points: [
-        "Pocket money, part-time & first-salary income categories",
-        "Fees, food, transport and everyday student spending",
-        "Start clean — your student money never mixes with anything else",
-      ],
-    },
   ];
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="radiogroup" aria-label="How will you use Cashflow Genius?">
