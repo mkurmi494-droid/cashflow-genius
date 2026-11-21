@@ -147,6 +147,37 @@ export function GlassOrb({
   );
 }
 
+/** Gradient brand tile: the Sprout on the violet → fuchsia → coral gradient,
+    exactly like the sidebar tile — the app icon itself, not the pale glass
+    orb. Used on the landing/auth screens so the logo there matches the app
+    icon (the old pale orb read as a different, flat violet mark). The `sub`
+    sits inside the tile in white, like it did inside the orb. */
+export function GradientTile({
+  size = 130,
+  label,
+  sub,
+}: {
+  size?: number;
+  label?: ReactNode;
+  sub?: string;
+}) {
+  return (
+    <div
+      className="relative mx-auto flex items-center justify-center"
+      style={{ width: size, height: size, animation: "floaty 7s ease-in-out infinite" }}
+      role="img"
+      aria-label="Cashflow Genius logo"
+    >
+      <div className="flex h-full w-full flex-col items-center justify-center rounded-[26%] bg-[linear-gradient(120deg,#7c3aed,#d946ef,#fb7185)] text-white shadow-[0_24px_50px_rgba(124,58,237,0.35)]">
+        {label ? <span className="flex items-center justify-center">{label}</span> : null}
+        {sub ? (
+          <span className="mt-1 px-4 text-center text-[11px] font-semibold leading-tight text-white/90">{sub}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function SectionTitle({
   title,
   hint,
