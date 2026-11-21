@@ -180,9 +180,11 @@ export interface SettleTransactionDraft {
  * The Money Flow transaction a settle creates, or null when none is
  * due. The money that moves is the entry's own amount, dated today:
  * someone repaying her is income, her repaying someone is an
- * expense. The description names the person so the entry is visibly
- * linked in Money Flow, and the counterparty is the person, exactly
- * like the EMI collect transaction names its customer. Categories
+ * expense. The description says what happened (repayment received /
+ * repayment made); the counterparty is the person, exactly like the
+ * EMI collect transaction names its customer — so the name appears
+ * once on the Money Flow row, not twice (the description must not
+ * repeat it, or the row reads "Rohan paid back Rohan"). Categories
  * match the app's own forms: a repayment to her is "Other income",
  * a repayment by her is "Loans". No transaction is due when the
  * entry is already settled — rows settled before this rule existed
@@ -201,7 +203,7 @@ export function settleTransactionFor(
     return {
       type: "income",
       category: "Other income",
-      description: `Lend/borrow settled — ${entry.person} paid back`,
+      description: `Lend/borrow settled — repayment received`,
       counterparty: entry.person,
       amountCents: entry.amountCents,
       date: today,
@@ -210,7 +212,7 @@ export function settleTransactionFor(
   return {
     type: "expense",
     category: "Loans",
-    description: `Lend/borrow settled — repaid ${entry.person}`,
+    description: `Lend/borrow settled — repayment made`,
     counterparty: entry.person,
     amountCents: entry.amountCents,
     date: today,
