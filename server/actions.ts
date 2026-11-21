@@ -50,6 +50,7 @@ import {
 import {
   isLendBorrowDirection,
   normalizeLendBorrow,
+  settleTransactionFor,
   sortLendBorrow,
   type LendBorrowDirection,
   type LendBorrowRecord,
@@ -3557,13 +3558,17 @@ export const Actions = {
 
   settleLendBorrow: defineAction({
     description:
-      "Marks a lend/borrow entry settled (paid back) or reopens it. Settling only closes the entry — it never creates a Money Flow transaction. Whether settling should record one linked transaction is still an open question for the owner.",
+      "Marks a lend/borrow entry settled (paid back) or reopens it. Settling an open entry also creates exactly one linked Money Flow transaction — income when someone repays her, expense when she repays someone — the EMI rule (owner's decision, 2026-11-21). At most one transaction per entry, ever: an already-settled entry, or one that already has a linked transaction, gains none. Reopening never deletes the transaction.",
     request: z.object({
       token: z.string().max(200).optional(),
       id: z.string(),
       settled: z.boolean(),
     }),
-    response: z.object({ id: z.string(), status: z.enum(["open", "settled"]) }),
+    response: z.object({
+      id: z.string(),
+      status: z.enum(["open", "settled"]),
+      transactionId: z.string().nullable(),
+    }),
     async handler(ctx, args) {
       /* db: module singleton (see ./lib/db) */
       const user = await requireUser(db, args.token);
@@ -3579,17 +3584,76 @@ export const Actions = {
       if (entryMode !== active)
         throw new Error(`This entry belongs to the ${MODE_LABELS[entryMode]} workspace. Open that workspace to change it.`);
       const status: "open" | "settled" = args.settled ? "settled" : "open";
+      const today = todayStrIst();
+      // The settle transaction, if one is due: only an open entry being
+      // settled now, with no linked transaction yet. Rows settled
+      // before this rule (and repeat settles) get none.
+      let transactionId: string | null = null;
+      if (args.settled) {
+        const existing = await db
+          .select()
+          .from(schema.transactions)
+          .where(
+            and(
+              eq(schema.transactions.lendBorrowId, entry.id),
+              eq(schema.transactions.ownerId, user.id),
+              eq(schema.transactions.mode, entryMode),
+            ),
+          )
+          .limit(1);
+        const draft = settleTransactionFor(
+          {
+            direction: isLendBorrowDirection(entry.direction) ? entry.direction : "lent",
+            person: entry.person,
+            amountCents: entry.amountCents,
+            status: entry.status === "settled" ? "settled" : "open",
+          },
+          existing[0]?.id ?? entry.transactionId ?? null,
+          today,
+        );
+        if (draft) {
+          transactionId = uid();
+          await Promise.all([
+            db.insert(schema.transactions).values({
+              id: transactionId,
+              ownerId: user.id,
+              mode: entryMode,
+              type: draft.type,
+              status: "posted",
+              category: draft.category,
+              description: draft.description,
+              counterparty: draft.counterparty,
+              amountCents: draft.amountCents,
+              date: draft.date,
+              lendBorrowId: entry.id,
+              demo: 0,
+            }),
+            db
+              .update(schema.lendBorrow)
+              .set({
+                status,
+                settledDate: today,
+                transactionId,
+                updatedAt: new Date(),
+              })
+              .where(eq(schema.lendBorrow.id, entry.id)),
+          ]);
+          await log(db, "Lend/borrow settled", `${entry.person} — ${draft.type}`, user.id);
+          /* no query invalidation on Vercel — the client refetches after mutations */
+          return { id: entry.id, status, transactionId };
+        }
+      }
       await db
         .update(schema.lendBorrow)
         .set({
           status,
-          settledDate: args.settled ? todayStrIst() : null,
+          settledDate: args.settled ? today : null,
           updatedAt: new Date(),
         })
         .where(eq(schema.lendBorrow.id, entry.id));
       await log(db, args.settled ? "Lend/borrow settled" : "Lend/borrow reopened", entry.person, user.id);
       /* no query invalidation on Vercel — the client refetches after mutations */
-      return { id: entry.id, status };
+      return { id: entry.id, status, transactionId };
     },
   }),
 
@@ -4122,7 +4186,7 @@ export const Actions = {
         z.object({
           mode: z.enum(["business", "personal", "creator"]),
           business: businessShape,
-          transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable() })),
+          transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable(), lendBorrowId: z.string().nullable() })),
           invoices: z.array(invoiceShape),
           notes: z.array(noteShape),
           recurring: z.array(
@@ -4179,7 +4243,7 @@ export const Actions = {
         workspaces.push({
           mode,
           business: bizOut(biz),
-          transactions: txns.map((t) => ({ ...txnOut(t), emiInstalmentId: t.emiInstalmentId ?? null })),
+          transactions: txns.map((t) => ({ ...txnOut(t), emiInstalmentId: t.emiInstalmentId ?? null, lendBorrowId: t.lendBorrowId ?? null })),
           invoices: invs.map((inv) => {
             const its = (itemsByInv.get(inv.id) ?? []).sort((a, b) => a.sort - b.sort);
             const totals = invoiceTotals(inv, its);
@@ -4222,7 +4286,7 @@ export const Actions = {
         workspaces: z.array(
           z.object({
             mode: z.enum(["business", "personal", "creator"]),
-            transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable().optional() })).max(5000),
+            transactions: z.array(txnShape.extend({ emiInstalmentId: z.string().nullable().optional(), lendBorrowId: z.string().nullable().optional() })).max(5000),
             invoices: z.array(invoiceShape).max(1000),
             notes: z.array(noteShape).max(2000),
             recurring: z.array(
@@ -4301,7 +4365,7 @@ export const Actions = {
               status: t.status === "pending" ? "pending" : "posted",
               category: t.category, description: t.description, counterparty: t.counterparty,
               amountCents: t.amountCents, date: t.date, paymentMethod: t.paymentMethod ?? "",
-              invoiceId: t.invoiceId, emiInstalmentId: t.emiInstalmentId ?? null, demo: t.demo ? 1 : 0,
+              invoiceId: t.invoiceId, emiInstalmentId: t.emiInstalmentId ?? null, lendBorrowId: t.lendBorrowId ?? null, demo: t.demo ? 1 : 0,
             });
             restored++;
           } catch { skipped++; }
