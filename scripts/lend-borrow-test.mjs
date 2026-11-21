@@ -133,8 +133,8 @@ check(
 // (18) settleTransactionFor — settling an open entry records the money
 // moving, exactly once (owner's decision, 2026-11-21: "Settle pe
 // entry banao — EMI jaisa"). Lent repaid is income, borrowed repaid
-// is an expense; the description names the person so the entry is
-// visibly linked in Money Flow.
+// is an expense; the description says what happened and the
+// counterparty names the person, so the name appears once on the row.
 const settleDay = "2026-11-21";
 check(
   "lent settle creates one income",
@@ -146,7 +146,7 @@ check(
   {
     type: "income",
     category: "Other income",
-    description: "Lend/borrow settled — Rohan paid back",
+    description: "Lend/borrow settled — repayment received",
     counterparty: "Rohan",
     amountCents: 100000,
     date: "2026-11-21",
@@ -162,7 +162,7 @@ check(
   {
     type: "expense",
     category: "Loans",
-    description: "Lend/borrow settled — repaid Meera",
+    description: "Lend/borrow settled — repayment made",
     counterparty: "Meera",
     amountCents: 50000,
     date: "2026-11-21",
