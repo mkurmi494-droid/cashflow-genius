@@ -120,6 +120,11 @@ export const transactions = pgTable("transactions", {
   paymentMethod: text("payment_method").notNull().default(""),
   invoiceId: text("invoice_id").unique(),
   emiInstalmentId: text("emi_instalment_id").unique(),
+  // Settle link: a lend/borrow entry settled after 2026-11-21 records
+  // the money moving as exactly one transaction, linked here — the
+  // EMI rule applied to lend/borrow. Unique, like emiInstalmentId,
+  // so one entry can never gain a second settle transaction.
+  lendBorrowId: text("lend_borrow_id").unique(),
   demo: integer("demo").notNull().default(0),
   createdAt: timestamp("created_at", { mode: "date" })
     .notNull()
@@ -496,12 +501,18 @@ export const lendBorrow = pgTable("lend_borrow", {
   date: text("date").notNull(), // yyyy-mm-dd (IST) when it happened
   dueDate: text("due_date"), // yyyy-mm-dd (IST), null = no due date
   note: text("note").notNull().default(""),
-  // open = still owed; settled = paid back. Settling only closes the
-  // entry — it never creates a transaction (see server/lib/lendBorrow.ts).
+  // open = still owed; settled = paid back. Settling an open entry
+  // closes it and records exactly one linked Money Flow transaction
+  // (see server/lib/lendBorrow.ts) — the EMI rule, owner's decision
+  // 2026-11-21. Rows settled before that rule keep no transaction.
   status: text("status", { enum: ["open", "settled"] })
     .notNull()
     .default("open"),
   settledDate: text("settled_date"), // yyyy-mm-dd (IST), null until settled
+  // The transaction the settle created, if any — the mirror of
+  // emiInstalments.transactionId. Null for entries settled before
+  // the rule, or never settled.
+  transactionId: text("transaction_id"),
   createdAt: timestamp("created_at", { mode: "date" })
     .notNull()
     .defaultNow(),
