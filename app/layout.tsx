@@ -9,6 +9,10 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "Cashflow Genius", statusBarStyle: "default" },
   icons: {
     icon: "/icon-192.png",
+    /* The tab favicon: a real Sprout .ico in public/ so /favicon.ico
+       serves the logo on every host (it was a 404 on Vercel and a
+       wrong black asterisk on Netlify). */
+    shortcut: "/favicon.ico",
     apple: "/apple-touch-icon.png",
   },
   /* Link previews (WhatsApp/Telegram/etc.) had no image to use, so they
