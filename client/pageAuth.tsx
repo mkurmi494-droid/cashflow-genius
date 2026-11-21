@@ -8,7 +8,7 @@ import {
   AUTH_TIMEOUT_MESSAGE,
 } from "./api";
 import { startGoogleOAuth } from "./supabase";
-import { GlassOrb, LogoMark, ParticleField } from "./components";
+import { GradientTile, LogoMark, ParticleField } from "./components";
 import { WhyCashflowGenius } from "./pitch";
 import { InstallButton } from "./pwa";
 // Intro videos live in public/assets/ (served at /assets/…) — Next.js
@@ -247,9 +247,9 @@ export function CinematicIntro({ onDone }: { onDone: () => void }) {
             transform: stage >= 1 ? "scale(1)" : "scale(0.8)",
           }}
         >
-          <GlassOrb
+          <GradientTile
             size={stage >= 2 ? 196 : 148}
-            label={stage >= 2 ? <LogoMark className="h-20 w-20 text-[#7c3aed]" /> : undefined}
+            label={stage >= 2 ? <LogoMark className="h-20 w-20 text-white" /> : undefined}
             sub={stage >= 2 ? "your money, visualised" : undefined}
           />
         </div>
@@ -440,7 +440,7 @@ function AuthCard({
       <ParticleField count={18} />
       <div className="glass rise relative w-full max-w-md rounded-3xl p-5 sm:p-8">
         <div className="text-center">
-          <GlassOrb size={92} label={<LogoMark className="h-11 w-11 text-[#7c3aed]" />} />
+          <GradientTile size={92} label={<LogoMark className="h-11 w-11 text-white" />} />
           <h1 className="mt-4 text-xl font-extrabold tracking-tight">{title}</h1>
           <p className="mt-1 text-sm text-[var(--dim)]">{subtitle}</p>
         </div>
@@ -467,7 +467,7 @@ export function PublicHome({
     <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-6 sm:py-10">
       <ParticleField count={22} />
       <div className="glass rise relative w-full max-w-lg rounded-3xl p-5 text-center sm:p-9">
-        <GlassOrb size={130} label={<LogoMark className="h-16 w-16 text-[#7c3aed]" />} sub="The Living Ledger" />
+        <GradientTile size={130} label={<LogoMark className="h-16 w-16 text-white" />} sub="The Living Ledger" />
         <p className="display-font mt-5 text-[28px] font-semibold leading-tight sm:text-[32px]">
           Cashflow <span className="text-[var(--accent)]">Genius</span>
         </p>
