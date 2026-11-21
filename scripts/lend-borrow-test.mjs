@@ -10,6 +10,11 @@
 // overdue, (14) totals count open lent/borrowed only, (15) the
 // direction filter works, (16) hide-completed hides settled rows,
 // (17) sorting puts overdue first, then earliest due date.
+// (18) settleTransactionFor (owner's decision, 2026-11-21 — settling
+// records the money moving, EMI-style): lent settle is one income,
+// borrowed settle is one expense, both named after the person and
+// dated today; an already-settled entry gains none, and settling
+// twice (or reopening and settling again) never creates a second one.
 // Run: node scripts/lend-borrow-test.mjs   (exit 1 on any failure)
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -123,6 +128,81 @@ check(
   "sort puts overdue first then earliest due date",
   mod.sortLendBorrow([openNoDue, openDueToday, openOverdue], today).map((r) => r.person),
   ["A", "B", "D"],
+);
+
+// (18) settleTransactionFor — settling an open entry records the money
+// moving, exactly once (owner's decision, 2026-11-21: "Settle pe
+// entry banao — EMI jaisa"). Lent repaid is income, borrowed repaid
+// is an expense; the description names the person so the entry is
+// visibly linked in Money Flow.
+const settleDay = "2026-11-21";
+check(
+  "lent settle creates one income",
+  mod.settleTransactionFor(
+    { direction: "lent", person: "Rohan", amountCents: 100000, status: "open" },
+    null,
+    settleDay,
+  ),
+  {
+    type: "income",
+    category: "Other income",
+    description: "Lend/borrow settled — Rohan paid back",
+    counterparty: "Rohan",
+    amountCents: 100000,
+    date: "2026-11-21",
+  },
+);
+check(
+  "borrowed settle creates one expense",
+  mod.settleTransactionFor(
+    { direction: "borrowed", person: "Meera", amountCents: 50000, status: "open" },
+    null,
+    settleDay,
+  ),
+  {
+    type: "expense",
+    category: "Loans",
+    description: "Lend/borrow settled — repaid Meera",
+    counterparty: "Meera",
+    amountCents: 50000,
+    date: "2026-11-21",
+  },
+);
+check(
+  "already-settled entry gains no transaction",
+  mod.settleTransactionFor(
+    { direction: "lent", person: "Rohan", amountCents: 100000, status: "settled" },
+    null,
+    settleDay,
+  ),
+  null,
+);
+check(
+  "settling twice creates no second transaction",
+  mod.settleTransactionFor(
+    { direction: "lent", person: "Rohan", amountCents: 100000, status: "open" },
+    "txn_abc123",
+    settleDay,
+  ),
+  null,
+);
+check(
+  "reopen then settle again creates no second transaction",
+  mod.settleTransactionFor(
+    { direction: "borrowed", person: "Meera", amountCents: 50000, status: "open" },
+    "txn_def456",
+    settleDay,
+  ),
+  null,
+);
+check(
+  "settled entry with no linked transaction still gains none",
+  mod.settleTransactionFor(
+    { direction: "borrowed", person: "Meera", amountCents: 50000, status: "settled" },
+    null,
+    settleDay,
+  ),
+  null,
 );
 
 rmSync(out, { recursive: true, force: true });
