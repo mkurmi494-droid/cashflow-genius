@@ -2,10 +2,15 @@
 // scripts/lend-borrow-test.mjs). Tracks money lent to someone
 // ("owed to me") and money borrowed from someone ("I owe"): person,
 // amount, date, optional due date, optional note, open/settled.
-// Settling a record only closes it — it never creates a transaction,
-// so the ledger can never move money by itself. Dates are
-// yyyy-mm-dd strings and compared as strings, which is exact for
-// that format; "today" is IST, like the rest of the app.
+// Settling an open record closes it AND records the money actually
+// moving — exactly one linked Money Flow transaction, the EMI rule
+// applied to lend/borrow (owner's decision, 2026-11-21: "Settle pe
+// entry banao — EMI jaisa"). At most one transaction per entry, ever:
+// settleTransactionFor returns null when the entry is already
+// settled or a linked transaction already exists, so settling twice
+// (or reopening and settling again) never creates a second one.
+// Dates are yyyy-mm-dd strings and compared as strings, which is
+// exact for that format; "today" is IST, like the rest of the app.
 export type LendBorrowDirection = "lent" | "borrowed";
 export type LendBorrowStatus = "open" | "settled";
 
@@ -160,4 +165,54 @@ export function sortLendBorrow<T extends LendBorrowRecord>(records: T[], today: 
     if (a.date !== b.date) return a.date > b.date ? -1 : 1;
     return 0;
   });
+}
+
+export interface SettleTransactionDraft {
+  type: "income" | "expense";
+  category: string;
+  description: string;
+  counterparty: string;
+  amountCents: number;
+  date: string;
+}
+
+/**
+ * The Money Flow transaction a settle creates, or null when none is
+ * due. The money that moves is the entry's own amount, dated today:
+ * someone repaying her is income, her repaying someone is an
+ * expense. The description names the person so the entry is visibly
+ * linked in Money Flow, and the counterparty is the person, exactly
+ * like the EMI collect transaction names its customer. Categories
+ * match the app's own forms: a repayment to her is "Other income",
+ * a repayment by her is "Loans". No transaction is due when the
+ * entry is already settled — rows settled before this rule existed
+ * never get one retroactively — or when a linked transaction already
+ * exists, so settling twice can never double-record the money.
+ * Never throws.
+ */
+export function settleTransactionFor(
+  entry: Pick<LendBorrowRecord, "direction" | "person" | "amountCents" | "status">,
+  existingTransactionId: string | null,
+  today: string,
+): SettleTransactionDraft | null {
+  if (entry.status !== "open") return null;
+  if (existingTransactionId) return null;
+  if (entry.direction === "lent") {
+    return {
+      type: "income",
+      category: "Other income",
+      description: `Lend/borrow settled — ${entry.person} paid back`,
+      counterparty: entry.person,
+      amountCents: entry.amountCents,
+      date: today,
+    };
+  }
+  return {
+    type: "expense",
+    category: "Loans",
+    description: `Lend/borrow settled — repaid ${entry.person}`,
+    counterparty: entry.person,
+    amountCents: entry.amountCents,
+    date: today,
+  };
 }
