@@ -204,7 +204,7 @@ export async function loadWorkspaceBatch(
         select id, owner_id as "ownerId", mode, type, status, category,
                description, counterparty, amount_cents as "amountCents",
                date, payment_method as "paymentMethod",
-               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId",
+               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId", lend_borrow_id as "lendBorrowId",
                demo,
                created_at at time zone 'UTC' as "createdAt",
                updated_at at time zone 'UTC' as "updatedAt"
@@ -391,7 +391,7 @@ export async function loadBriefingBatch(
         select id, owner_id as "ownerId", mode, type, status, category,
                description, counterparty, amount_cents as "amountCents",
                date, payment_method as "paymentMethod",
-               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId",
+               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId", lend_borrow_id as "lendBorrowId",
                demo,
                created_at at time zone 'UTC' as "createdAt",
                updated_at at time zone 'UTC' as "updatedAt"
@@ -465,7 +465,7 @@ export async function loadCombinedBatch(
         select id, owner_id as "ownerId", mode, type, status, category,
                description, counterparty, amount_cents as "amountCents",
                date, payment_method as "paymentMethod",
-               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId",
+               invoice_id as "invoiceId", emi_instalment_id as "emiInstalmentId", lend_borrow_id as "lendBorrowId",
                demo,
                created_at at time zone 'UTC' as "createdAt",
                updated_at at time zone 'UTC' as "updatedAt"
