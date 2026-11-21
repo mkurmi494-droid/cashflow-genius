@@ -14,7 +14,7 @@ VerifyScreen,
 import type { Route } from "./types";
 import { APP_MODES, CUSTOM_CATEGORY, MODE_ICONS, MODE_LABELS, PAYMENT_METHODS, categoriesFor, categoryOptionsFor, currencyConfirmOptions, fileToBase64, fmtMoney, isPersonalLike, modeOf, todayStr, workspaceHasMoney, type AppMode, type State } from "./lib";
 import { CurrencyPicker, currencyMeta } from "./currencyPicker";
-import { CalcIcon, CategorySelect, GlassOrb, LogoMark, Modal, ModePicker, ParticleField } from "./components";
+import { CalcIcon, CategorySelect, GradientTile, LogoMark, Modal, ModePicker, ParticleField } from "./components";
 import { LoadingMark } from "./LoadingMark";
 import { AiAvatar } from "./AiAvatar";
 import { DashboardPage } from "./pageDashboard";
@@ -139,7 +139,7 @@ function Welcome({
       <div className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-10">
         <ParticleField count={20} />
         <div className="glass rise relative w-full max-w-lg rounded-3xl p-7 text-center sm:p-9">
-          <GlassOrb size={130} label={<LogoMark className="h-16 w-16 text-[#7c3aed]" />} sub="The Living Ledger" />
+          <GradientTile size={130} label={<LogoMark className="h-16 w-16 text-white" />} sub="The Living Ledger" />
           <h1 className="display-font mt-5 text-[26px] font-semibold tracking-tight">Welcome to Cashflow Genius</h1>
           <p className="mt-2 text-sm leading-relaxed text-[var(--dim)]">
             Command Center, AI CFO, forecasts, invoices, budgets and more — all from one ledger.
