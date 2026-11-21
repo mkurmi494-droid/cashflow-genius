@@ -50,6 +50,13 @@
       "when": 1795163753772,
       "tag": "0006_lend_borrow",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795236143962,
+      "tag": "0007_lend_borrow_settle",
+      "breakpoints": true
     }
   ]
 }
