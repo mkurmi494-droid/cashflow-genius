@@ -194,9 +194,20 @@ export function LendBorrowPage({ state, notify, notifyDeleted, confirm }: PagePr
 
   const settleMut = useMutation({
     mutationFn: (v: { id: string; settled: boolean }) => api.settleLendBorrow(v),
-    onSuccess: (_res, v) => {
+    onSuccess: (res, v) => {
       invalidate();
-      notify(v.settled ? "Marked settled — no Money Flow entry was added." : "Entry reopened.");
+      if (!v.settled) {
+        notify("Entry reopened.");
+        return;
+      }
+      const entry = entries.find((e) => e.id === v.id);
+      if (res.transactionId && entry) {
+        notify(
+          `Marked settled — ${fmtMoney(entry.amountCents, currency)} ${entry.direction === "lent" ? "income" : "expense"} added to Money Flow.`,
+        );
+      } else {
+        notify("Marked settled.");
+      }
     },
   });
 
@@ -259,7 +270,7 @@ export function LendBorrowPage({ state, notify, notifyDeleted, confirm }: PagePr
         </p>
       )}
       <p className="text-xs text-[var(--muted)]">
-        Settling only marks an entry paid back — it never adds a Money Flow transaction.
+        Settling marks an entry paid back and adds one linked Money Flow entry — income when someone repays you, expense when you repay someone.
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
