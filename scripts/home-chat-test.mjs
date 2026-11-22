@@ -610,5 +610,114 @@ const badPlan = mod.normalizeHomeChatReply(
 check("invalid plan in envelope is not executed", badPlan.plan, null);
 check("invalid plan in envelope reports the error", badPlan.planError, "Transaction needs a positive amount.");
 
+// (20) Forgiving normaliser — Sarya's report, 2026-11-22 13:38 IST:
+// "food expense 500" failed twice with "I couldn't pin down the
+// details". The model omits the date and sometimes writes the amount
+// in rupees ("amount") instead of paise ("amountCents"). A missing
+// date now defaults to today and the rupee alias is accepted.
+check(
+  "add_transaction missing date defaults to today",
+  mod.normalizeHomeChatPlan(
+    { kind: "add_transaction", type: "expense", amountCents: 50000, category: "Food" },
+    TODAY,
+  ).plan?.date,
+  TODAY,
+);
+check(
+  "add_transaction rupee amount alias accepted",
+  mod.normalizeHomeChatPlan(
+    { kind: "add_transaction", type: "expense", amount: 500, category: "Food", date: "2026-11-20" },
+    TODAY,
+  ).plan?.amountCents,
+  50000,
+);
+check(
+  "add_transaction amountCents wins over amount alias",
+  mod.normalizeHomeChatPlan(
+    { kind: "add_transaction", type: "expense", amountCents: 30000, amount: 500, category: "Food", date: "2026-11-20" },
+    TODAY,
+  ).plan?.amountCents,
+  30000,
+);
+check(
+  "deposit_savings missing date defaults to today",
+  mod.normalizeHomeChatPlan(
+    { kind: "deposit_savings", goalName: "Home Fund", amountCents: 100000 },
+    TODAY,
+  ).plan?.date,
+  TODAY,
+);
+check(
+  "add_budget monthlyLimit alias accepted",
+  mod.normalizeHomeChatPlan({ kind: "add_budget", category: "Food", monthlyLimit: 5000 }, TODAY).plan
+    ?.monthlyLimitCents,
+  500000,
+);
+check(
+  "add_savings_goal still needs a real target date",
+  mod.normalizeHomeChatPlan(
+    { kind: "add_savings_goal", name: "Home Fund", targetCents: 1000000 },
+    TODAY,
+  ).ok,
+  false,
+);
+
+// (21) Deterministic rule fallback — same report: when the model
+// gives nothing usable, the simplest spoken requests still work.
+check(
+  "simple 'food expense 500' parses",
+  mod.parseSimpleHomeChatCommand("food expense 500", TODAY),
+  {
+    kind: "add_transaction",
+    type: "expense",
+    amountCents: 50000,
+    category: "Food & groceries",
+    description: "food expense 500",
+    counterparty: "",
+    date: TODAY,
+  },
+);
+check(
+  "simple 'food expense 300' parses",
+  mod.parseSimpleHomeChatCommand("food expense 300", TODAY)?.amountCents,
+  30000,
+);
+check(
+  "simple 'kal income ayegi 21k' is tomorrow's income",
+  mod.parseSimpleHomeChatCommand("kal income ayegi 21k", TODAY),
+  {
+    kind: "add_transaction",
+    type: "income",
+    amountCents: 2100000,
+    category: "General",
+    description: "kal income ayegi 21k",
+    counterparty: "",
+    date: "2026-11-21",
+  },
+);
+check(
+  "simple 'kal kharcha 500' is yesterday's expense",
+  mod.parseSimpleHomeChatCommand("kal kharcha 500", TODAY)?.date,
+  "2026-11-19",
+);
+check(
+  "simple 'Add 1500 for shopping' parses",
+  mod.parseSimpleHomeChatCommand("Add ₹1,500 for shopping", TODAY)?.amountCents,
+  150000,
+);
+check("simple question returns null", mod.parseSimpleHomeChatCommand("How much money do I have?", TODAY), null);
+check("simple no-amount returns null", mod.parseSimpleHomeChatCommand("food expense", TODAY), null);
+check("simple delete returns null", mod.parseSimpleHomeChatCommand("delete the 500 food expense", TODAY), null);
+check(
+  "simple correction returns null",
+  mod.parseSimpleHomeChatCommand("change the 500 food expense to 700", TODAY),
+  null,
+);
+check(
+  "simple '1000 nahi, 1500 karo' returns null",
+  mod.parseSimpleHomeChatCommand("1000 nahi, 1500 karo", TODAY),
+  null,
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
