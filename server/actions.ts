@@ -60,6 +60,7 @@ import {
   effectiveReplyKind,
   normalizeHomeChatPlan,
   normalizeHomeChatReply,
+  parseSimpleHomeChatCommand,
   type HomeChatPlan,
 } from "./lib/homeChat";
 
@@ -6658,6 +6659,21 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
         return { reply: "I didn't quite catch that — could you say it again?", kind: "clarify" as const };
       const replyText = shaped.reply;
       if (!shaped.plan) {
+        // The model gave nothing usable — its call failed, or its
+        // plan failed validation (live, 2026-11-22: "food expense
+        // 500" failed twice this way). Try the deterministic parse
+        // for the simplest spoken requests before giving up; anything
+        // it cannot parse keeps the model's reply.
+        const simple = parseSimpleHomeChatCommand(args.message, today);
+        if (simple !== null) {
+          const done = await executeHomeChatPlan(ctx, user.id, wsMode, business, simple, args.token, today);
+          if (!done.ok) return { reply: done.error, kind: "clarify" as const };
+          return {
+            reply: done.reply,
+            kind: "action" as const,
+            done: { summary: done.summary, undoId: done.undoId, undoKind: done.undoKind },
+          };
+        }
         if (shaped.kind === "clarify")
           return { reply: replyText, kind: "clarify" as const, question: shaped.question ?? replyText };
         return { reply: replyText, kind: "chat" as const };
