@@ -56,6 +56,7 @@ import {
   type LendBorrowRecord,
 } from "./lib/lendBorrow";
 import {
+  correctPlanAmountScale,
   describePlan,
   effectiveReplyKind,
   normalizeHomeChatPlan,
@@ -6684,7 +6685,7 @@ Rules: a budget needs a category and a monthly limit; a savings goal needs a nam
           kind: "clarify" as const,
           question: shaped.planError,
         };
-      const plan = shaped.plan;
+      const plan = correctPlanAmountScale(shaped.plan, args.message, today);
       // Only a delete or a currency change waits for a confirm tap.
       // Every safe add plan executes at once, even when the model
       // hedged with kind "confirm" (live, 2026-11-20).
