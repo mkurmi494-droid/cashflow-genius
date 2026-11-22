@@ -719,5 +719,71 @@ check(
   null,
 );
 
+// (22) Amount-scale cross-check — Sarya's live report, 2026-11-22
+// 19:03 IST: "income from others 12000" was recorded as INR 120.
+// The model copied the rupee number straight into the paise field
+// (amountCents: 12000), which validation cannot catch because 12000
+// is a valid paise value. The message's own number is ground truth:
+// when the deterministic parse gives the same add and the model's
+// paise are exactly the message's rupees (x100 apart), fix it.
+const scalePlan = (amountCents, type = "income") => ({
+  kind: "add_transaction",
+  type,
+  amountCents,
+  category: "Client payments",
+  description: "Income from others",
+  counterparty: "",
+  date: "2026-11-22",
+});
+check(
+  "scale 'income from others 12000' model 12000 -> 1200000",
+  mod.correctPlanAmountScale(scalePlan(12000), "income from others 12000", TODAY)?.amountCents,
+  1200000,
+);
+check(
+  "scale correct model 1200000 untouched",
+  mod.correctPlanAmountScale(scalePlan(1200000), "income from others 12000", TODAY)?.amountCents,
+  1200000,
+);
+check(
+  "scale 'food expense 500' model 500 -> 50000",
+  mod.correctPlanAmountScale(scalePlan(500, "expense"), "food expense 500", TODAY)?.amountCents,
+  50000,
+);
+check(
+  "scale correct model 50000 untouched",
+  mod.correctPlanAmountScale(scalePlan(50000, "expense"), "food expense 500", TODAY)?.amountCents,
+  50000,
+);
+check(
+  "scale 'income 120' model 120 -> 12000",
+  mod.correctPlanAmountScale(scalePlan(120), "income 120", TODAY)?.amountCents,
+  12000,
+);
+check(
+  "scale 'kal income ayegi 21k' model 21000 -> 2100000",
+  mod.correctPlanAmountScale(scalePlan(21000), "kal income ayegi 21k", TODAY)?.amountCents,
+  2100000,
+);
+check(
+  "scale type mismatch not corrected",
+  mod.correctPlanAmountScale(scalePlan(12000, "expense"), "income 12000", TODAY)?.amountCents,
+  12000,
+);
+check(
+  "scale question message not corrected",
+  mod.correctPlanAmountScale(scalePlan(12000), "How much money do I have?", TODAY)?.amountCents,
+  12000,
+);
+check(
+  "scale non-add plan untouched",
+  mod.correctPlanAmountScale(
+    { kind: "add_budget", category: "Food", monthlyLimitCents: 500000 },
+    "food budget 5000",
+    TODAY,
+  )?.monthlyLimitCents,
+  500000,
+);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
