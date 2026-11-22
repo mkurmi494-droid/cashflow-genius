@@ -529,6 +529,30 @@ export function parseSimpleHomeChatCommand(message: string, today: string): Home
   };
 }
 
+/**
+ * Corrects the one unit error the forgiving normaliser cannot catch:
+ * the model copying the rupee number straight into the paise field
+ * (live, 2026-11-22: "income from others 12000" was recorded as
+ * INR 120 — amountCents: 12000 sailed through validation because
+ * 12000 is a perfectly valid paise value). The user's own message
+ * is ground truth for a simple add: when the deterministic parse
+ * gives the same add_transaction and the model's paise are exactly
+ * the message's rupees (x100 apart), trust the message. A correct
+ * plan is never touched. Never throws.
+ */
+export function correctPlanAmountScale(plan: HomeChatPlan, message: string, today: string): HomeChatPlan {
+  if (plan.kind !== "add_transaction") return plan;
+  const simple = parseSimpleHomeChatCommand(message, today);
+  if (
+    simple === null ||
+    simple.kind !== "add_transaction" ||
+    simple.type !== plan.type ||
+    plan.amountCents * 100 !== simple.amountCents
+  )
+    return plan;
+  return { ...plan, amountCents: simple.amountCents };
+}
+
 const REPLY_KINDS = new Set(["chat", "action", "confirm", "clarify"]);
 const REPLY_WRAPPER_KEYS = ["answer", "response", "result", "data"];
 const REPLY_TEXT_KEYS = ["reply", "answer", "message", "response", "result", "summary"];
