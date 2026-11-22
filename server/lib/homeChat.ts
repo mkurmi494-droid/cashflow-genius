@@ -142,6 +142,32 @@ function asCents(v: unknown): number | null {
   return v;
 }
 
+/** Amount in paise, accepting the rupee alias the model often uses
+ *  instead: amountCents (integer paise) first, else amount (rupees,
+ *  ×100). A plan must never be lost because the model wrote
+ *  "amount": 500 instead of "amountCents": 50000 (live, 2026-11-22). */
+function asAmountCents(v: unknown, aliasV: unknown): number | null {
+  const direct = asCents(v);
+  if (direct !== null) return direct;
+  if (typeof aliasV === "number" && Number.isFinite(aliasV) && aliasV > 0) {
+    const cents = Math.round(aliasV * 100);
+    if (cents > 0 && cents <= HOME_CHAT_MAX_CENTS) return cents;
+  }
+  return null;
+}
+
+/** A plan date, defaulting to today when the model omits it or sends
+ *  an unusable value — the prompt already promises the date defaults
+ *  to today, so a missing date must not lose the whole plan
+ *  (live, 2026-11-22: "food expense 500" failed twice on this). */
+function asPlanDate(v: unknown, today: string): string {
+  if (typeof v === "string") {
+    const d = resolveChatDate(v, today);
+    if (d) return d;
+  }
+  return today;
+}
+
 function isRealDate(y: number, m: number, d: number): boolean {
   if (m < 1 || m > 12 || d < 1 || d > 31) return false;
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -223,26 +249,25 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
   if (typeof kind !== "string") return fail("Plan has no kind.");
   if (kind === "add_transaction") {
     const type = raw.type === "income" || raw.type === "expense" ? raw.type : null;
-    const amountCents = asCents(raw.amountCents);
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
     const category = asTrimmed(raw.category, 60) ?? "General";
     const description = asOptionalText(raw.description, 200);
     const counterparty = asOptionalText(raw.counterparty, 120);
-    const date = typeof raw.date === "string" ? resolveChatDate(raw.date, today) : null;
+    const date = asPlanDate(raw.date, today);
     if (!type) return fail("Transaction needs income or expense.");
     if (amountCents === null) return fail("Transaction needs a positive amount.");
-    if (!date) return fail("Transaction needs a real date.");
     return { ok: true, plan: { kind, type, amountCents, category, description, counterparty, date } };
   }
   if (kind === "add_budget") {
     const category = asTrimmed(raw.category, 60);
-    const monthlyLimitCents = asCents(raw.monthlyLimitCents);
+    const monthlyLimitCents = asAmountCents(raw.monthlyLimitCents, raw.monthlyLimit);
     if (!category) return fail("Budget needs a category.");
     if (monthlyLimitCents === null) return fail("Budget needs a positive monthly limit.");
     return { ok: true, plan: { kind, category, monthlyLimitCents } };
   }
   if (kind === "add_savings_goal") {
     const name = asTrimmed(raw.name, 120);
-    const targetCents = asCents(raw.targetCents);
+    const targetCents = asAmountCents(raw.targetCents, raw.target);
     const targetDate = typeof raw.targetDate === "string" ? resolveChatDate(raw.targetDate, today) : null;
     if (!name) return fail("Savings goal needs a name.");
     if (targetCents === null) return fail("Savings goal needs a positive target.");
@@ -251,18 +276,17 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
   }
   if (kind === "deposit_savings") {
     const goalName = asTrimmed(raw.goalName, 120);
-    const amountCents = asCents(raw.amountCents);
-    const date = typeof raw.date === "string" ? resolveChatDate(raw.date, today) : null;
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
+    const date = asPlanDate(raw.date, today);
     if (!goalName) return fail("Deposit needs a goal name.");
     if (amountCents === null) return fail("Deposit needs a positive amount.");
-    if (!date) return fail("Deposit needs a real date.");
     return { ok: true, plan: { kind, goalName, amountCents, date } };
   }
   if (kind === "add_lend_borrow") {
     const direction = raw.direction === "lent" || raw.direction === "borrowed" ? raw.direction : null;
     const person = asTrimmed(raw.person, 120);
-    const amountCents = asCents(raw.amountCents);
-    const date = typeof raw.date === "string" ? resolveChatDate(raw.date, today) : null;
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
+    const date = asPlanDate(raw.date, today);
     const dueDate =
       raw.dueDate === null || raw.dueDate === undefined
         ? null
@@ -273,7 +297,6 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
     if (!direction) return fail("Lend/borrow needs lent or borrowed.");
     if (!person) return fail("Lend/borrow needs a person.");
     if (amountCents === null) return fail("Lend/borrow needs a positive amount.");
-    if (!date) return fail("Lend/borrow needs a real date.");
     if (raw.dueDate !== null && raw.dueDate !== undefined && !dueDate)
       return fail("Lend/borrow due date is not a real date.");
     return { ok: true, plan: { kind, direction, person, amountCents, date, dueDate, note } };
@@ -287,22 +310,21 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
     const type = raw.type === "income" || raw.type === "expense" ? raw.type : null;
     const category = asTrimmed(raw.category, 60);
     const description = asOptionalText(raw.description, 200);
-    const amountCents = asCents(raw.amountCents);
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
     const frequency = raw.frequency === "weekly" || raw.frequency === "monthly" ? raw.frequency : null;
-    const nextDate = typeof raw.nextDate === "string" ? resolveChatDate(raw.nextDate, today) : null;
+    const nextDate = asPlanDate(raw.nextDate, today);
     if (!type) return fail("Recurring entry needs income or expense.");
     if (!category) return fail("Recurring entry needs a category.");
     if (amountCents === null) return fail("Recurring entry needs a positive amount.");
     if (!frequency) return fail("Recurring entry needs weekly or monthly.");
-    if (!nextDate) return fail("Recurring entry needs a real next date.");
     return { ok: true, plan: { kind, type, category, description, amountCents, frequency, nextDate } };
   }
   if (kind === "edit_transaction") {
     const matchType = raw.matchType === "income" || raw.matchType === "expense" ? raw.matchType : null;
-    const matchAmountCents =
-      raw.matchAmountCents === null || raw.matchAmountCents === undefined
-        ? null
-        : asCents(raw.matchAmountCents);
+    const matchAmountProvided =
+      (raw.matchAmountCents !== null && raw.matchAmountCents !== undefined) ||
+      (raw.matchAmount !== null && raw.matchAmount !== undefined);
+    const matchAmountCents = asAmountCents(raw.matchAmountCents, raw.matchAmount);
     const matchCategory =
       raw.matchCategory === null || raw.matchCategory === undefined
         ? null
@@ -312,8 +334,10 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
       typeof raw.matchDate === "string" && raw.matchDate.trim().length > 0
         ? resolveChatDate(raw.matchDate, today)
         : today;
-    const amountCents =
-      raw.amountCents === null || raw.amountCents === undefined ? null : asCents(raw.amountCents);
+    const amountProvided =
+      (raw.amountCents !== null && raw.amountCents !== undefined) ||
+      (raw.amount !== null && raw.amount !== undefined);
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
     const category =
       raw.category === null || raw.category === undefined ? null : asTrimmed(raw.category, 60);
     const description =
@@ -327,12 +351,12 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
           ? resolveChatDate(raw.date, today)
           : null;
     if (!matchType) return fail("Edit needs income or expense to match.");
-    if (raw.matchAmountCents !== null && raw.matchAmountCents !== undefined && matchAmountCents === null)
+    if (matchAmountProvided && matchAmountCents === null)
       return fail("Edit match amount is not a positive amount.");
     if (!matchAmountCents && !matchCategory && !matchDescription)
       return fail("Edit needs something to match — an amount, a category or a description.");
     if (!matchDate) return fail("Edit match date is not a real date.");
-    if (raw.amountCents !== null && raw.amountCents !== undefined && amountCents === null)
+    if (amountProvided && amountCents === null)
       return fail("Edit needs a positive new amount.");
     if (raw.category !== null && raw.category !== undefined && !category)
       return fail("Edit category is empty.");
@@ -358,12 +382,11 @@ export function normalizeHomeChatPlan(raw: unknown, today: string): Norm {
   }
   if (kind === "delete_transaction") {
     const type = raw.type === "income" || raw.type === "expense" ? raw.type : null;
-    const amountCents = asCents(raw.amountCents);
-    const date = typeof raw.date === "string" ? resolveChatDate(raw.date, today) : null;
+    const amountCents = asAmountCents(raw.amountCents, raw.amount);
+    const date = asPlanDate(raw.date, today);
     const description = asOptionalText(raw.description, 200);
     if (!type) return fail("Delete needs income or expense.");
     if (amountCents === null) return fail("Delete needs a positive amount.");
-    if (!date) return fail("Delete needs a real date.");
     return { ok: true, plan: { kind, amountCents, date, type, description } };
   }
   if (kind === "change_currency") {
@@ -399,6 +422,111 @@ export function describePlan(plan: HomeChatPlan, fmt: (cents: number) => string)
     case "change_currency":
       return `Change this workspace's currency to ${plan.currency} (every amount converts at the live rate)`;
   }
+}
+
+/**
+ * Deterministic fallback for the simplest spoken requests, used only
+ * when the model gives nothing usable — its call failed, or its plan
+ * failed validation (live, 2026-11-22: "food expense 500" failed
+ * twice with "I couldn't pin down the details" and "food expense
+ * 300" twice with the AI fallback, all while the OpenAI key and
+ * quota were fine). Only add_transaction, only when the message
+ * carries an amount AND an income/expense word; anything else
+ * returns null and the caller keeps the model's reply. It never
+ * guesses a direction or an amount, and it never fires on a delete,
+ * an edit, a currency change or a question — those stay with the
+ * model. Date words follow the app's convention (kal = yesterday,
+ * parson = tomorrow), except "kal" with a future-tense verb ("kal
+ * income ayegi") which means tomorrow.
+ */
+const SIMPLE_INCOME_WORDS = ["income", "kamai", "salary", "mila", "aaya", "received", "credited"];
+const SIMPLE_EXPENSE_WORDS = ["expense", "kharcha", "kharch", "spent", "spend", "paid", "bought", "kharid"];
+const SIMPLE_FUTURE_WORDS = ["ayegi", "aayegi", "aayega", "ayega", "milega", "milegi", "hoga", "will come", "will get"];
+const SIMPLE_SKIP_WORDS = [
+  "delete", "remove", "hatao", "cancel", "undo",
+  "change", "badlo", "edit", "nahi", "galti", "wrong", "instead",
+  "currency", "dollar", "usd", "euro",
+];
+const SIMPLE_CATEGORY_HINTS: { words: string[]; name: string; kind: "income" | "expense" }[] = [
+  { words: ["food", "khana", "chai", "coffee", "grocer", "sabzi", "lunch", "dinner"], name: "Food & groceries", kind: "expense" },
+  { words: ["shopping", "kapde", "shoes", "amazon", "flipkart"], name: "Shopping", kind: "expense" },
+  { words: ["travel", "petrol", "cab", "auto", "metro", "bus", "train", "flight"], name: "Transport", kind: "expense" },
+  { words: ["rent", "kiraya"], name: "Rent", kind: "expense" },
+  { words: ["bill", "bijli", "recharge", "internet"], name: "Bills", kind: "expense" },
+  { words: ["salary"], name: "Salary", kind: "income" },
+  { words: ["client"], name: "Customer payments", kind: "income" },
+];
+
+function extractSimpleAmountCents(text: string): number | null {
+  const t = text.replace(/,/g, "");
+  const withCurrency = t.match(/(?:₹|rs\.?|inr)\s*(\d+(?:\.\d+)?)\s*(k|thousand|hazaar)?\b/i);
+  const plain = t.match(/(\d+(?:\.\d+)?)\s*(k|thousand|hazaar|rupees?|rupay|rs)\b/i);
+  const bare = t.match(/\b(\d+(?:\.\d+)?)\b/);
+  const m = withCurrency ?? plain ?? bare;
+  if (!m) return null;
+  let v = parseFloat(m[1] ?? "");
+  if (!Number.isFinite(v) || v <= 0) return null;
+  const unit = (m[2] ?? "").toLowerCase();
+  if (unit === "k" || unit === "thousand" || unit === "hazaar") v *= 1000;
+  const cents = Math.round(v * 100);
+  if (cents <= 0 || cents > HOME_CHAT_MAX_CENTS) return null;
+  return cents;
+}
+
+function pickSimpleCategoryHint(lower: string) {
+  for (const hint of SIMPLE_CATEGORY_HINTS) {
+    if (hint.words.some((w) => lower.includes(w))) return hint;
+  }
+  return null;
+}
+
+function parseSimpleDate(text: string, today: string): string {
+  const t = ` ${text.toLowerCase()} `;
+  if (/\bkal\b/.test(t) && SIMPLE_FUTURE_WORDS.some((w) => t.includes(w))) return addDays(today, 1);
+  if (/\bparson\b/.test(t) || /\btomorrow\b/.test(t)) return addDays(today, 1);
+  if (/\bkal\b/.test(t) || /\byesterday\b/.test(t)) return addDays(today, -1);
+  if (/\baaj\b/.test(t) || /\btoday\b/.test(t)) return today;
+  return today;
+}
+
+export function parseSimpleHomeChatCommand(message: string, today: string): HomeChatPlan | null {
+  if (typeof message !== "string") return null;
+  const text = message.trim();
+  if (text.length === 0 || text.length > 200 || text.includes("?")) return null;
+  const lower = text.toLowerCase();
+  if (SIMPLE_SKIP_WORDS.some((w) => lower.includes(w))) return null;
+  const amountCents = extractSimpleAmountCents(text);
+  if (amountCents === null) return null;
+  const hasIncome = SIMPLE_INCOME_WORDS.some((w) => lower.includes(w));
+  const hasExpense = SIMPLE_EXPENSE_WORDS.some((w) => lower.includes(w));
+  const hint = pickSimpleCategoryHint(lower);
+  let type: "income" | "expense" | null = null;
+  if (hasIncome && !hasExpense) type = "income";
+  else if (hasExpense && !hasIncome) type = "expense";
+  else if (hasIncome && hasExpense) {
+    const firstInc = Math.min(
+      ...SIMPLE_INCOME_WORDS.filter((w) => lower.includes(w)).map((w) => lower.indexOf(w)),
+    );
+    const firstExp = Math.min(
+      ...SIMPLE_EXPENSE_WORDS.filter((w) => lower.includes(w)).map((w) => lower.indexOf(w)),
+    );
+    type = firstInc <= firstExp ? "income" : "expense";
+  }
+  if (!type && hint) {
+    // No explicit income/expense word: the category decides ("Add
+    // 1500 for shopping" is an expense; "Add 5000 salary" is income).
+    type = hint.kind;
+  }
+  if (!type) return null;
+  return {
+    kind: "add_transaction",
+    type,
+    amountCents,
+    category: hint ? hint.name : "General",
+    description: text.slice(0, 200),
+    counterparty: "",
+    date: parseSimpleDate(text, today),
+  };
 }
 
 const REPLY_KINDS = new Set(["chat", "action", "confirm", "clarify"]);
